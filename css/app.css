@@ -1,0 +1,289 @@
+/* Styles that Tailwind utilities do not cover: the canvas, the split pane,
+   vis-network overrides, and the Gantt / histogram widgets. */
+
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+/* ─── Focus visibility ───────────────────────────────────────
+   Inputs deliberately drop the default outline for a coloured border, so a
+   focus ring is restored explicitly — otherwise keyboard users get no
+   indication of where they are. */
+
+:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 1px;
+}
+
+.vis-network:focus {
+  outline: none;
+}
+
+.vis-network:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: -2px;
+}
+
+/* ─── Work area and split pane ───────────────────────────── */
+
+#work-area {
+  position: relative;
+  z-index: 1;
+  --canvas-height: 50%;
+}
+
+#canvas-pane {
+  height: var(--canvas-height);
+  min-height: 0;
+  position: relative;
+}
+
+#bottom-panel {
+  flex: 1;
+  min-height: 0;
+}
+
+#splitter {
+  flex-shrink: 0;
+  height: 10px;
+  cursor: row-resize;
+  background: #1e293b;
+  border-top: 1px solid #334155;
+  border-bottom: 1px solid #334155;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+
+#splitter::before {
+  content: '';
+  width: 42px;
+  height: 3px;
+  border-radius: 2px;
+  background: #475569;
+  transition: background 0.15s;
+}
+
+#splitter:hover::before,
+#splitter:focus-visible::before,
+#splitter.dragging::before {
+  background: #38bdf8;
+}
+
+#splitter.dragging {
+  background: #263449;
+}
+
+#network-canvas {
+  width: 100%;
+  height: 100%;
+  background: #0f172a;
+  position: relative;
+  z-index: 1;
+}
+
+#app > header {
+  position: relative;
+  z-index: 50;
+  overflow: visible;
+}
+
+/* ─── Toolbar ────────────────────────────────────────────── */
+
+.tool-btn {
+  white-space: nowrap;
+}
+
+.tool-btn-active {
+  border-color: rgba(56, 189, 248, 0.5);
+  background: rgba(56, 189, 248, 0.2);
+  color: #7dd3fc;
+}
+
+.tool-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Buttons that toggle between hidden and a flex row. Tailwind emits `flex`
+   after `hidden`, so the two classes together leave the element visible —
+   these keep `hidden` authoritative and supply the layout when shown. */
+#btn-more:not(.hidden),
+#btn-delete-subpath:not(.hidden) {
+  display: inline-flex;
+}
+
+/* Inside the overflow menu the toolbar buttons become full-width rows. */
+#more-slot > * {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+/* ─── Node and card decoration ───────────────────────────── */
+
+.critical-glow {
+  box-shadow: 0 0 12px #ff4d4d, 0 0 4px #ff4d4d;
+  border-color: #ff4d4d !important;
+}
+
+.modal-backdrop {
+  background: rgba(2, 6, 23, 0.75);
+}
+
+.toast-enter {
+  animation: toastIn 0.25s ease-out;
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+#bottom-panel::-webkit-scrollbar { width: 8px; }
+#bottom-panel::-webkit-scrollbar-track { background: #0f172a; }
+#bottom-panel::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+
+/* Hide the built-in vis-network manipulation chrome. */
+.vis-manipulation,
+.vis-edit-mode,
+.vis-close {
+  display: none !important;
+}
+
+/* ─── Columns (swimlane) view ────────────────────────────── */
+
+#work-area.swimlane-mode #bottom-panel {
+  padding: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+#work-area.swimlane-mode #bottom-toolbar,
+#work-area.swimlane-mode #gantt-panel.open {
+  margin: 0;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid #334155;
+}
+
+#work-area.swimlane-mode #milestones-container {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  min-height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+#work-area.swimlane-mode .swim-col {
+  flex: 1 0 220px;
+  min-width: 220px;
+  max-width: 360px;
+  border-right: 1px solid #334155;
+  display: flex;
+  flex-direction: column;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+#work-area.swimlane-mode .swim-col:last-child {
+  border-right: none;
+}
+
+#work-area.swimlane-mode .swim-col-head {
+  flex-shrink: 0;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #334155;
+  background: rgba(30, 41, 59, 0.9);
+}
+
+#work-area.swimlane-mode .swim-col-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* ─── Mini-Gantt ─────────────────────────────────────────── */
+
+#gantt-panel { display: none; }
+#gantt-panel.open { display: block; }
+
+.gantt-row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.gantt-bar-track {
+  position: relative;
+  height: 22px;
+  background: #1e293b;
+  border-radius: 4px;
+  border: 1px solid #334155;
+}
+
+.gantt-bar {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 3px;
+  min-width: 4px;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 10px;
+  color: #f1f5f9;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.gantt-bar.critical {
+  background: linear-gradient(90deg, #ff4d4d, #b91c1c);
+  box-shadow: 0 0 8px #ff4d4d66;
+}
+
+.gantt-bar.normal {
+  background: linear-gradient(90deg, #3b82f6, #1d4ed8);
+}
+
+.gantt-bar .prog {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 3px 0 0 3px;
+}
+
+/* ─── Monte Carlo histogram ──────────────────────────────── */
+
+.mc-bar {
+  background: #3b82f6;
+  border-radius: 2px 2px 0 0;
+  min-width: 2px;
+}
+
+/* ─── Narrow screens ─────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  .gantt-row { grid-template-columns: 84px 1fr; }
+  #cpm-summary { row-gap: 0.25rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-enter { animation: none; }
+  #splitter::before { transition: none; }
+}
