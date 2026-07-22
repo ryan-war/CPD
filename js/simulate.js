@@ -1,120 +1,172 @@
 // Monte Carlo schedule risk simulation.
+//
+// The work happens in a worker (see simulate.worker.js) so the page stays
+// responsive and the run continues even if the tab is put in the background.
+// A main-thread fallback covers environments where workers are unavailable.
 
-import { compileGraph, projectDurationFor } from './cpm.js';
+import { compileGraph, indexGraph, scheduleSample } from './cpm.js';
+import { sampleTriangular, percentile, correlation, histogram } from './sampling.js';
 
-/**
- * Inverse-CDF sample from a triangular distribution.
- * `m` is clamped into [o, p]: outside that range the closed form takes the
- * square root of a negative and yields NaN, which a loaded project could
- * otherwise trigger.
- */
-export function sampleTriangular(o, m, p) {
-  if (!(p > o)) return o;
-  const mode = Math.min(p, Math.max(o, m));
-  const u = Math.random();
-  const split = (mode - o) / (p - o);
-  if (u < split) return o + Math.sqrt(u * (p - o) * (mode - o));
-  return p - Math.sqrt((1 - u) * (p - o) * (p - mode));
-}
-
-/** Linear-interpolated percentile of an ascending array. */
-export function percentile(sorted, p) {
-  if (!sorted.length) return 0;
-  const i = (sorted.length - 1) * p;
-  const lo = Math.floor(i);
-  const hi = Math.ceil(i);
-  if (lo === hi) return sorted[lo];
-  return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
-}
+export { sampleTriangular, percentile, histogram };
 
 /**
- * Run `runs` schedule simulations without blocking the page.
- *
- * The dependency graph and its topological order are built once and reused,
- * and each run needs only a forward pass — the previous implementation rebuilt
- * the whole graph and ran Kahn's algorithm per run, which made 20 000 runs
- * freeze the tab. Work is sliced across animation frames so the progress
- * indicator paints and the window stays responsive.
- *
- * @returns {Promise<{mean:number,p50:number,p80:number,p95:number,results:number[]}|null>}
- *          null when the graph contains a cycle.
+ * @returns {Promise<object|null>} null when the graph contains a cycle.
  */
-export function runMonteCarlo({ nodes, mode, rollup, runs, onProgress, chunk = 250 }) {
-  return new Promise(resolve => {
-    if (!nodes.length) {
-      resolve(null);
+export function runMonteCarlo({ nodes, rollup, runs, onProgress }) {
+  if (!nodes.length) return Promise.resolve(null);
+
+  const graph = compileGraph(nodes);
+  if (graph.cycleIds.length) return Promise.resolve(null);
+
+  // Sub-path roll-up needs the whole project, which the worker does not have,
+  // so those durations are resolved here and passed across as fixed values.
+  const fixed = nodes.map(n => (rollup && n.linkedSubPage ? rollup(n.linkedSubPage) : 0));
+  const plain = nodes.map(n => ({
+    id: n.id,
+    min: n.min,
+    likely: n.likely,
+    max: n.max,
+    dependencies: n.dependencies
+  }));
+
+  return runInWorker({ nodes: plain, fixed, runs, onProgress })
+    .catch(() => runInline({ nodes, fixed, runs, onProgress }));
+}
+
+function runInWorker({ nodes, fixed, runs, onProgress }) {
+  return new Promise((resolve, reject) => {
+    let worker;
+    try {
+      worker = new Worker(new URL('./simulate.worker.js', import.meta.url), { type: 'module' });
+    } catch (err) {
+      reject(err);
       return;
     }
 
-    const graph = compileGraph(nodes);
-    if (graph.cycleIds.length) {
-      resolve(null);
-      return;
-    }
+    const started = performance.now();
+    let settled = false;
 
-    // Tasks whose duration comes from a linked sub-page are held at their
-    // rolled-up value; only leaf estimates are sampled.
-    const sampled = [];
-    const fixed = new Map();
-    nodes.forEach(n => {
-      const rolled = rollup && n.linkedSubPage ? rollup(n.linkedSubPage) : 0;
-      if (rolled > 0) {
-        fixed.set(n.id, rolled);
-      } else {
-        const o = Number(n.min) || 0;
-        const p = Number(n.max) || 0;
-        const m = n.likely != null && Number.isFinite(Number(n.likely))
-          ? Number(n.likely)
-          : (o + p) / 2;
-        sampled.push({ id: n.id, o, m, p });
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      worker.terminate();
+      resolve(value);
+    };
+
+    worker.onerror = err => {
+      if (settled) return;
+      settled = true;
+      worker.terminate();
+      reject(err);
+    };
+
+    worker.onmessage = event => {
+      const data = event.data;
+      if (data.type === 'progress') {
+        if (onProgress) onProgress(data.fraction);
+        return;
       }
+      if (data.type === 'error') {
+        finish(null);
+        return;
+      }
+      if (onProgress) onProgress(1);
+      finish(summarise({
+        results: data.results,
+        runs,
+        sampled: data.samples.map(s => ({ id: s.id, samples: s.values })),
+        criticalCount: data.criticalCount,
+        ids: data.ids,
+        elapsedMs: performance.now() - started
+      }));
+    };
+
+    worker.postMessage({ nodes, runs, fixed });
+  });
+}
+
+/**
+ * Fallback path: the same loop on the main thread, sliced across timeouts so
+ * the window keeps painting. Slower and pausable by the browser, but correct.
+ */
+function runInline({ nodes, fixed, runs, onProgress }) {
+  return new Promise(resolve => {
+    const indexed = indexGraph(compileGraph(nodes));
+    const durations = new Float64Array(indexed.n);
+    const criticalFlags = new Uint8Array(indexed.n);
+    const criticalCount = new Uint32Array(indexed.n);
+    const results = new Float64Array(runs);
+    const started = performance.now();
+
+    const sampled = [];
+    nodes.forEach((n, i) => {
+      if (fixed[i] > 0) {
+        durations[i] = fixed[i];
+        return;
+      }
+      const o = Number(n.min) || 0;
+      const p = Number(n.max) || 0;
+      const m = n.likely != null && Number.isFinite(Number(n.likely))
+        ? Number(n.likely)
+        : (o + p) / 2;
+      sampled.push({ index: i, id: n.id, o, m, p, samples: new Float64Array(runs) });
     });
 
-    const durations = new Map(fixed);
-    const results = new Array(runs);
     let done = 0;
+    const chunk = Math.max(200, Math.ceil(runs / 40));
 
     function step() {
       const end = Math.min(runs, done + chunk);
       for (; done < end; done++) {
-        for (const t of sampled) {
-          durations.set(t.id, sampleTriangular(t.o, t.m, t.p));
+        for (let s = 0; s < sampled.length; s++) {
+          const task = sampled[s];
+          const value = sampleTriangular(task.o, task.m, task.p);
+          task.samples[done] = value;
+          durations[task.index] = value;
         }
-        results[done] = projectDurationFor(graph, durations);
+        results[done] = scheduleSample(indexed, durations, criticalFlags);
+        for (let i = 0; i < criticalFlags.length; i++) {
+          if (criticalFlags[i]) criticalCount[i]++;
+        }
       }
 
       if (done < runs) {
         if (onProgress) onProgress(done / runs);
-        requestAnimationFrame(step);
+        window.setTimeout(step, 0);
         return;
       }
-
       if (onProgress) onProgress(1);
-      results.sort((a, b) => a - b);
-      resolve({
-        mean: results.reduce((sum, v) => sum + v, 0) / results.length,
-        p50: percentile(results, 0.5),
-        p80: percentile(results, 0.8),
-        p95: percentile(results, 0.95),
-        results
-      });
+      resolve(summarise({
+        results, runs, sampled, criticalCount,
+        ids: indexed.ids, elapsedMs: performance.now() - started
+      }));
     }
 
-    requestAnimationFrame(step);
+    window.setTimeout(step, 0);
   });
 }
 
-/** Bin a sorted result set into a histogram of `bins` counts. */
-export function histogram(sorted, bins = 24) {
-  const min = sorted[0];
-  const max = sorted[sorted.length - 1];
-  const span = Math.max(0.001, max - min);
-  const counts = new Array(bins).fill(0);
-  for (const v of sorted) {
-    let b = Math.floor(((v - min) / span) * bins);
-    if (b >= bins) b = bins - 1;
-    if (b < 0) b = 0;
-    counts[b]++;
-  }
-  return { counts, min, max };
+function summarise({ results, runs, sampled, criticalCount, ids, elapsedMs }) {
+  const sensitivity = sampled
+    .map(task => ({ id: task.id, correlation: correlation(task.samples, results) }))
+    .filter(entry => Number.isFinite(entry.correlation))
+    .sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation));
+
+  const criticality = Array.from(ids)
+    .map((id, i) => ({ id, index: criticalCount[i] / runs }))
+    .sort((a, b) => b.index - a.index);
+
+  const sorted = Array.from(results).sort((a, b) => a - b);
+  return {
+    runs,
+    elapsedMs,
+    mean: sorted.reduce((sum, v) => sum + v, 0) / sorted.length,
+    p50: percentile(sorted, 0.5),
+    p80: percentile(sorted, 0.8),
+    p95: percentile(sorted, 0.95),
+    results: sorted,
+    criticality,
+    criticalityById: new Map(criticality.map(c => [c.id, c.index])),
+    sensitivity
+  };
 }

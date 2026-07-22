@@ -1,9 +1,11 @@
-// Dialogs: task, milestone, sub-path, and Monte Carlo.
+// Dialogs: task, dependency, milestone, sub-path, settings, and Monte Carlo.
 
 import { $, escapeHtml, toast, openModal, closeModal, isModalOpen } from './dom.js';
-import { isLaneId } from './config.js';
-import { schedule } from './schedule.js';
+import { isLaneId, CRITICAL_COLOR } from './config.js';
+import { schedule, setCriticality } from './schedule.js';
 import { runMonteCarlo, histogram } from './simulate.js';
+import { DEPENDENCY_TYPES, DEPENDENCY_LABELS, dependenciesOf, toDependency } from './cpm.js';
+import { WEEKDAY_NAMES, DEFAULT_CALENDAR } from './calendar.js';
 import {
   getState, currentDiagram, allNodes, findNode, pageTitle, subPageIds, uid
 } from './state.js';
@@ -41,6 +43,45 @@ function populateLinkedSelect(currentValue) {
   }
 }
 
+/** Editable list of predecessors, each with a relation type and lag. */
+function renderDependencyEditor(node) {
+  const host = $('edit-deps');
+  const deps = dependenciesOf(node);
+  const candidates = allNodes().filter(n => n.id !== node.id);
+
+  if (!candidates.length) {
+    host.innerHTML = '<p class="text-[10px] text-muted">No other tasks to depend on yet.</p>';
+    return;
+  }
+
+  host.innerHTML = deps.map((dep, i) => `
+    <div class="dep-row" data-dep-index="${i}">
+      <select class="dep-pred" aria-label="Predecessor">
+        ${candidates.map(c => `<option value="${escapeHtml(c.id)}"${c.id === dep.id ? ' selected' : ''}>${escapeHtml(c.id)} — ${escapeHtml(c.title)}</option>`).join('')}
+      </select>
+      <select class="dep-type" aria-label="Relation type">
+        ${DEPENDENCY_TYPES.map(t => `<option value="${t}"${t === dep.type ? ' selected' : ''}>${t} · ${escapeHtml(DEPENDENCY_LABELS[t])}</option>`).join('')}
+      </select>
+      <input class="dep-lag" type="number" step="0.5" value="${dep.lag}" aria-label="Lag in days" title="Lag in days; negative overlaps" />
+      <button type="button" class="icon-btn icon-btn-danger dep-remove" aria-label="Remove dependency"><i data-lucide="x" class="w-3.5 h-3.5" aria-hidden="true"></i></button>
+    </div>`).join('') || '<p class="text-[10px] text-muted">No predecessors.</p>';
+}
+
+export function readDependencyEditor() {
+  const rows = [...$('edit-deps').querySelectorAll('.dep-row')];
+  const seen = new Map();
+  rows.forEach(row => {
+    const id = row.querySelector('.dep-pred').value;
+    if (!id) return;
+    seen.set(id, {
+      id,
+      type: row.querySelector('.dep-type').value,
+      lag: Number(row.querySelector('.dep-lag').value) || 0
+    });
+  });
+  return [...seen.values()];
+}
+
 export function openNodeModal(nodeId) {
   if (!nodeId || isLaneId(nodeId)) return;
   const found = findNode(nodeId);
@@ -60,12 +101,39 @@ export function openNodeModal(nodeId) {
   populateLinkedSelect(getState().activeView === 'main'
     ? (node.linkedSubPage || '')
     : (node.linkedMainNode || ''));
+  renderDependencyEditor(node);
 
   $('edit-milestone').innerHTML = currentDiagram().milestones.map(ms =>
     `<option value="${escapeHtml(ms.id)}"${ms.id === milestone.id ? ' selected' : ''}>${escapeHtml(ms.title)}</option>`
   ).join('');
 
   openModal('modal-node');
+}
+
+export function addDependencyRow() {
+  const node = findNode($('edit-node-id').value);
+  if (!node) return;
+  const existing = readDependencyEditor();
+  const candidate = allNodes().find(n =>
+    n.id !== node.node.id && !existing.some(d => d.id === n.id));
+  if (!candidate) {
+    toast('Every other task is already a predecessor', 'info');
+    return;
+  }
+  renderDependencyEditor({
+    ...node.node,
+    dependencies: [...existing, { id: candidate.id, type: 'FS', lag: 0 }]
+  });
+  app.refreshIcons();
+}
+
+export function removeDependencyRow(row) {
+  const node = findNode($('edit-node-id').value);
+  if (!node) return;
+  const index = Number(row.dataset.depIndex);
+  const next = readDependencyEditor().filter((_, i) => i !== index);
+  renderDependencyEditor({ ...node.node, dependencies: next });
+  app.refreshIcons();
 }
 
 export function closeNodeModal() {
@@ -106,6 +174,12 @@ export function saveNodeForm(event) {
     return;
   }
 
+  const dependencies = readDependencyEditor().filter(d => d.id !== newId && d.id !== oldId);
+  if (app.wouldCycle(oldId, dependencies)) {
+    toast('Those dependencies would create a circular path', 'error');
+    return;
+  }
+
   const node = found.node;
   const state = getState();
   node.title = $('edit-title').value.trim();
@@ -116,6 +190,7 @@ export function saveNodeForm(event) {
   node.status = $('edit-status').value;
   node.progress = Math.max(0, Math.min(100, Number($('edit-progress').value) || 0));
   if (node.status === 'done') node.progress = 100;
+  node.dependencies = dependencies.map(toDependency);
 
   const linkValue = $('edit-linked').value || null;
   if (state.activeView === 'main') {
@@ -129,7 +204,10 @@ export function saveNodeForm(event) {
   if (newId !== oldId) {
     node.id = newId;
     allNodes().forEach(n => {
-      n.dependencies = (n.dependencies || []).map(d => (d === oldId ? newId : d));
+      n.dependencies = (n.dependencies || []).map(d => {
+        const dep = toDependency(d);
+        return dep.id === oldId ? { ...dep, id: newId } : dep;
+      });
     });
     if (state.activeView === 'main') {
       Object.keys(state.diagrams).forEach(viewId => {
@@ -150,6 +228,55 @@ export function saveNodeForm(event) {
 
   closeNodeModal();
   app.onChange('Task saved');
+}
+
+// ─── Dependency (from double-clicking a link) ───────────────
+
+export function openEdgeModal(edgeKey) {
+  const [fromId, toId] = String(edgeKey).split('->');
+  const found = findNode(toId);
+  if (!found) return;
+  const dep = dependenciesOf(found.node).find(d => d.id === fromId);
+  if (!dep) return;
+
+  $('edge-from').value = fromId;
+  $('edge-to').value = toId;
+  $('edge-summary').textContent = `${fromId} → ${toId}`;
+  $('edge-type').innerHTML = DEPENDENCY_TYPES.map(t =>
+    `<option value="${t}"${t === dep.type ? ' selected' : ''}>${t} · ${escapeHtml(DEPENDENCY_LABELS[t])}</option>`
+  ).join('');
+  $('edge-lag').value = dep.lag;
+  openModal('modal-edge');
+}
+
+export function closeEdgeModal() {
+  closeModal('modal-edge');
+}
+
+export function saveEdgeForm(event) {
+  event.preventDefault();
+  const fromId = $('edge-from').value;
+  const toId = $('edge-to').value;
+  const found = findNode(toId);
+  if (!found) return;
+
+  found.node.dependencies = dependenciesOf(found.node).map(d =>
+    d.id === fromId
+      ? { id: d.id, type: $('edge-type').value, lag: Number($('edge-lag').value) || 0 }
+      : d
+  );
+  closeEdgeModal();
+  app.onChange('Dependency updated');
+}
+
+export function deleteEdge() {
+  const fromId = $('edge-from').value;
+  const toId = $('edge-to').value;
+  const found = findNode(toId);
+  if (!found) return;
+  found.node.dependencies = dependenciesOf(found.node).filter(d => d.id !== fromId);
+  closeEdgeModal();
+  app.onChange(`Removed ${fromId} → ${toId}`);
 }
 
 // ─── Milestone ─────────────────────────────────────────────
@@ -259,6 +386,54 @@ export function deleteSubpath() {
   app.onChange('Sub-path deleted', { fit: true, tabs: true });
 }
 
+// ─── Project settings ──────────────────────────────────────
+
+export function openSettingsModal() {
+  const state = getState();
+  const cal = { ...DEFAULT_CALENDAR, ...(state.calendar || {}) };
+
+  $('set-calendar-enabled').checked = !!cal.enabled;
+  $('set-start-date').value = cal.startDate || '';
+  $('set-holidays').value = (cal.holidays || []).join('\n');
+  $('set-near-critical').value = state.nearCriticalDays;
+  $('set-node-shape').value = state.nodeShape;
+
+  $('set-workdays').innerHTML = WEEKDAY_NAMES.map((name, i) => `
+    <label class="workday-chip">
+      <input type="checkbox" value="${i}"${cal.workdays.includes(i) ? ' checked' : ''} />
+      <span>${name}</span>
+    </label>`).join('');
+
+  openModal('modal-settings');
+}
+
+export function closeSettingsModal() {
+  closeModal('modal-settings');
+}
+
+export function saveSettingsForm(event) {
+  event.preventDefault();
+  const state = getState();
+  const workdays = [...$('set-workdays').querySelectorAll('input:checked')].map(cb => Number(cb.value));
+
+  if (!workdays.length) {
+    toast('Select at least one working day', 'error');
+    return;
+  }
+
+  state.calendar = {
+    enabled: $('set-calendar-enabled').checked,
+    startDate: $('set-start-date').value || null,
+    workdays,
+    holidays: $('set-holidays').value.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
+  };
+  state.nearCriticalDays = Math.max(0, Number($('set-near-critical').value) || 0);
+  state.nodeShape = $('set-node-shape').value === 'box' ? 'box' : 'circle';
+
+  closeSettingsModal();
+  app.onChange('Project settings saved');
+}
+
 // ─── Monte Carlo ───────────────────────────────────────────
 
 let simulating = false;
@@ -273,7 +448,7 @@ export function closeMonteModal() {
 
 export async function runSimulation() {
   if (simulating) return;
-  const { nodes, mode, rollup, graph } = schedule();
+  const { nodes, rollup, graph } = schedule();
 
   if (!nodes.length) {
     toast('No tasks to simulate', 'info');
@@ -293,12 +468,10 @@ export async function runSimulation() {
   button.disabled = true;
   button.textContent = 'Running…';
   progress.classList.remove('hidden');
-  progress.setAttribute('aria-valuenow', '0');
   $('mc-progress-bar').style.width = '0%';
 
   const stats = await runMonteCarlo({
     nodes,
-    mode,
     rollup,
     runs,
     onProgress: fraction => {
@@ -319,6 +492,8 @@ export async function runSimulation() {
   }
 
   showMonteResults(stats);
+  setCriticality(stats.criticalityById);
+  app.onSimulationComplete();
   toast(`Simulated ${runs} runs`, 'success');
 }
 
@@ -339,8 +514,50 @@ function showMonteResults(stats) {
   $('mc-hist').innerHTML = counts.map(c =>
     `<div class="mc-bar flex-1" style="height:${Math.max(4, (c / peak) * 100)}%" title="${c} runs"></div>`
   ).join('');
+
+  renderCriticality(stats.criticality);
+  renderTornado(stats.sensitivity);
+}
+
+/** How often each task landed on the critical path across all runs. */
+function renderCriticality(criticality) {
+  const host = $('mc-criticality');
+  const top = criticality.filter(c => c.index > 0).slice(0, 8);
+  if (!top.length) {
+    host.innerHTML = '<p class="text-[10px] text-muted">No task was critical in any run.</p>';
+    return;
+  }
+  host.innerHTML = top.map(c => `
+    <div class="bar-row">
+      <span class="bar-label">${escapeHtml(c.id)}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${c.index * 100}%;--bar:${CRITICAL_COLOR}"></div></div>
+      <span class="bar-value">${Math.round(c.index * 100)}%</span>
+    </div>`).join('');
+}
+
+/**
+ * Which estimates actually drive the outcome, by correlation between a task's
+ * sampled duration and the resulting project duration.
+ */
+function renderTornado(sensitivity) {
+  const host = $('mc-tornado');
+  const top = sensitivity.filter(s => Math.abs(s.correlation) > 0.01).slice(0, 8);
+  if (!top.length) {
+    host.innerHTML = '<p class="text-[10px] text-muted">No single task dominates the outcome.</p>';
+    return;
+  }
+  host.innerHTML = top.map(s => {
+    const magnitude = Math.abs(s.correlation);
+    return `
+      <div class="bar-row">
+        <span class="bar-label">${escapeHtml(s.id)}</span>
+        <div class="bar-track"><div class="bar-fill" style="width:${magnitude * 100}%;--bar:${s.correlation >= 0 ? '#f59e0b' : '#38bdf8'}"></div></div>
+        <span class="bar-value">${s.correlation.toFixed(2)}</span>
+      </div>`;
+  }).join('');
 }
 
 export function anyDialogOpen() {
-  return ['modal-node', 'modal-milestone', 'modal-subpath', 'modal-monte'].some(isModalOpen);
+  return ['modal-node', 'modal-edge', 'modal-milestone', 'modal-subpath', 'modal-settings', 'modal-monte']
+    .some(isModalOpen);
 }

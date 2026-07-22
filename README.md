@@ -2,33 +2,62 @@
 
 A browser-based Critical Path Method planner. Build a task network on a canvas,
 and it computes the schedule as you go: earliest and latest start/finish, slack,
-and the critical path. Adds PERT estimation, a Gantt timeline, Monte Carlo
-schedule risk analysis, and nested sub-path diagrams.
+and the critical path. Adds PERT estimation, working-day calendars, a Gantt
+timeline, Monte Carlo schedule risk analysis, and nested sub-path diagrams.
 
 No accounts, no server, no build step — static files and a browser. Projects are
 saved and loaded as JSON files you keep yourself.
 
 ## Features
 
+### Scheduling
+
 - **CPM engine** — forward and backward pass, slack, and critical path,
   recalculated on every edit.
+- **All four precedence relations** — finish-to-start, start-to-start,
+  finish-to-finish, and start-to-finish, each with positive lag or negative
+  lead. Non finish-to-start links are drawn dashed and labelled.
 - **Two estimation modes** — average `(Min + Max) / 2`, or PERT
   `(O + 4M + P) / 6`.
-- **Milestones** — group tasks into phases, with a columns view that aligns the
-  canvas and the task cards by milestone.
+- **Working-day calendar** — set a project start date, working days, and
+  holidays, and every figure can be read as a real date instead of a day
+  number.
+- **At-risk highlighting** — tasks that are not critical but have little float
+  are flagged separately, at a threshold you choose. Schedules slip through
+  these far more often than through tasks already known to be critical.
 - **Sub-path pages** — link a task to its own diagram; the sub-path's project
   duration rolls up and replaces the parent task's estimate.
-- **Mini-Gantt** — timeline bars positioned by ES/EF, shaded by progress, with
-  the critical path highlighted.
-- **Monte Carlo simulation** — samples each task from a triangular O/M/P
-  distribution and reports mean, P50, P80, and P95 durations with a histogram.
-- **Progress and status** — per-task status and percentage, drawn as a ring
-  around each node.
-- **Dependency tracing** — hover a task to highlight everything upstream and
-  downstream of it.
+- **Baseline comparison** — snapshot the schedule, then see per-task and
+  whole-project drift against it as things change.
 - **Cycle protection** — circular dependencies are rejected as you draw them,
   and any present in a loaded file are reported by name.
-- **Undo / redo**, search, PNG export, and JSON save/load.
+
+### Risk analysis
+
+- **Monte Carlo simulation** — samples each task from a triangular O/M/P
+  distribution and reports mean, P50, P80 and P95 durations with a histogram.
+  Runs in a worker, so the page stays responsive and the run continues if you
+  switch tabs. 20 000 runs on a small project takes about a second.
+- **Criticality index** — how often each task landed on the critical path
+  across every run. A task critical in 96% of runs deserves more attention than
+  one critical in 4%.
+- **Sensitivity** — which estimates actually drive the project duration, by
+  correlation between each task's sampled duration and the outcome.
+
+### Interface
+
+- **Two task shapes** — circles by default, or activity-on-node boxes that lay
+  ES, duration, EF, LS, slack and LF out in a fixed grid.
+- **Milestones** — group tasks into phases, reorder them, and use the columns
+  view to align the canvas and the task cards by milestone.
+- **Mini-Gantt** — timeline bars positioned by ES/EF with a real date axis,
+  shaded by progress, critical and at-risk paths highlighted.
+- **Light and dark themes.**
+- **Dependency tracing** — hover a task to highlight everything upstream and
+  downstream of it.
+- **Minimap and zoom controls**, a resizable diagram/panel split, a colour
+  legend, multi-select with bulk status changes, and inline progress sliders.
+- **Undo / redo**, search, and full keyboard access to the canvas.
 
 ## Usage
 
@@ -38,11 +67,14 @@ Open the published page, or serve the directory locally (see below).
 
 | Action | How |
 | --- | --- |
-| Add a task | **Add Task**, or double-click empty canvas |
-| Edit a task | Double-click it, or the pencil on its card |
+| Add a task | **Add Task**, `n`, or double-click empty canvas |
+| Edit a task | Double-click it, press `Enter`, or the pencil on its card |
 | Draw a dependency | **Connect**, then select predecessor and successor |
+| Change a relation or lag | Double-click the link, or edit it on the task |
 | Delete a task or dependency | Select it and press `Delete` |
-| Move a task | Drag it |
+| Select several tasks | `Ctrl`-click, or `Ctrl+A` |
+| Update progress | Drag the slider on the task card |
+| Reorder milestones | The arrows in the milestone header |
 | Follow a task's link | `Alt`-click (or `Cmd`-click) it |
 
 ### Keyboard shortcuts
@@ -50,8 +82,15 @@ Open the published page, or serve the directory locally (see below).
 | Key | Action |
 | --- | --- |
 | `/` | Focus the search box |
+| `n` | Add a task |
 | `c` | Toggle connection mode |
-| `Delete` / `Backspace` | Remove the selected task or dependency |
+| `f` | Fit the diagram to the view |
+| `←` `→` | Move between tasks |
+| `Enter` | Edit the selected task |
+| `1` `2` `3` `4` | Set the selected tasks to not started / in progress / blocked / done |
+| `+` `−` | Zoom in and out |
+| `Ctrl+A` | Select all tasks |
+| `Delete` | Remove the selected tasks or dependency |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` or `Ctrl+Shift+Z` | Redo |
 | `Esc` | Close a dialog or menu, cancel connecting, clear search |
@@ -65,21 +104,37 @@ opening `index.html` directly from the filesystem will not work.
 ```sh
 git clone https://github.com/ryan-war/CPD.git
 cd CPD
-python -m http.server 8080
+npx serve            # or: python -m http.server 8080
 ```
 
-Then open <http://localhost:8080>.
+Any static server works. There is nothing to install and nothing to build.
 
-Any static server works equally well (`npx serve`, `php -S localhost:8080`, and
-so on). There is nothing to install and nothing to build.
+### Tests
+
+The scheduling engine, calendar, and simulation primitives are covered by tests
+with no dependencies beyond Node itself:
+
+```sh
+node --test test/cpm.test.js
+```
+
+These include a baseline lock: the shipped default project must schedule to
+exactly the figures it always has. A change there means the engine's behaviour
+has changed.
 
 ## Project file format
 
 **Save JSON** downloads the whole workspace — every page, its milestones, tasks,
-positions, and view settings — as a single file. **Load JSON** restores it.
+positions, and settings — as a single file. **Load JSON** restores it.
+
 Loaded files are validated and repaired on import: missing fields are filled in,
 out-of-range estimates are clamped, duplicate task IDs are made unique, and
-dependencies or links pointing at things that no longer exist are dropped.
+dependencies or links pointing at things that no longer exist are dropped. Files
+written before precedence types existed — where `dependencies` was a plain array
+of task IDs — are migrated automatically to finish-to-start with no lag.
+
+**Export CSV** writes every task on every page with its computed schedule, for
+use in a spreadsheet.
 
 ```jsonc
 {
@@ -87,6 +142,16 @@ dependencies or links pointing at things that no longer exist are dropped.
   "activeView": "main",
   "layoutMode": "free",          // "free" | "cpm" | "milestone"
   "estimationMode": "average",   // "average" | "pert"
+  "theme": "dark",               // "dark" | "light"
+  "nodeShape": "circle",         // "circle" | "box"
+  "nearCriticalDays": 1,         // slack at or below this is flagged at-risk
+  "calendar": {
+    "enabled": false,
+    "startDate": "2026-04-13",
+    "workdays": [1, 2, 3, 4, 5], // 0 = Sunday … 6 = Saturday
+    "holidays": ["2026-12-25"]
+  },
+  "baseline": null,              // captured schedule, for drift comparison
   "nodeDisplay": { "id": true, "esEf": true, "slack": true },
   "pageOrder": ["main", "sub_1"],
   "pageTitles": { "main": "Main Diagram", "sub_1": "Sub-Path 1" },
@@ -106,7 +171,9 @@ dependencies or links pointing at things that no longer exist are dropped.
               "max": 4,                  // pessimistic
               "progress": 100,
               "status": "done",          // not_started | in_progress | blocked | done
-              "dependencies": [],        // IDs of predecessor tasks
+              "dependencies": [
+                { "id": "Z", "type": "FS", "lag": 0 }  // FS | SS | FF | SF
+              ],
               "position": { "x": 0, "y": 20 },
               "linkedSubPage": "sub_1",  // roll up this page's duration
               "linkedMainNode": null     // sub-path tasks point back to Main
@@ -126,31 +193,36 @@ Export to JSON before closing the tab.
 ## Structure
 
 ```
-index.html          markup and module entry point
-css/app.css         canvas, split pane, Gantt, and widget styles
-js/main.js          boot, orchestration, event wiring
-js/state.js         project shape, validation, accessors, undo/redo
-js/cpm.js           scheduling engine — pure, no DOM
-js/schedule.js      per-render schedule cache
-js/simulate.js      triangular sampling and Monte Carlo
-js/network.js       canvas rendering and interaction
-js/panel.js         milestone cards, Gantt, summary
-js/modals.js        dialogs
-js/layout-ui.js     split pane and compact toolbar
-js/links.js         cross-page task links
-js/io.js            JSON and PNG export/import
-js/dom.js           escaping, toasts, focus management
-js/config.js        constants
+index.html               markup and module entry point
+css/app.css              theming, canvas chrome, panel, Gantt, widgets
+js/main.js               boot, orchestration, event wiring
+js/state.js              project shape, validation, accessors, undo/redo
+js/cpm.js                scheduling engine — pure, no DOM
+js/calendar.js           working-day calendar — pure, no DOM
+js/schedule.js           per-render schedule cache, at-risk set, baseline drift
+js/sampling.js           distributions and summary statistics
+js/simulate.js           Monte Carlo driver (worker, with inline fallback)
+js/simulate.worker.js    the simulation loop itself
+js/network.js            canvas rendering, interaction, minimap, image export
+js/panel.js              milestone cards, Gantt, summary, legend
+js/modals.js             dialogs
+js/layout-ui.js          split pane and compact toolbar
+js/links.js              cross-page task links
+js/io.js                 JSON, CSV, and PNG export/import
+js/dom.js                escaping, toasts, focus management
+js/config.js             constants and theme palettes
+test/cpm.test.js         engine, calendar, and migration tests
 ```
 
-`js/cpm.js` has no DOM dependency and can be imported directly in Node:
+`js/cpm.js` and `js/calendar.js` have no DOM dependency and can be imported
+directly in Node:
 
 ```sh
 node --input-type=module -e "
 import {computeCPM} from './js/cpm.js';
 console.log(computeCPM([
   {id:'A', min:2, likely:3, max:4, dependencies:[]},
-  {id:'B', min:3, likely:4, max:5, dependencies:['A']}
+  {id:'B', min:3, likely:4, max:5, dependencies:[{id:'A', type:'FS', lag:0}]}
 ]).projectDuration);
 "
 ```

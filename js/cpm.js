@@ -6,6 +6,38 @@
 
 const EPSILON = 1e-9;
 
+/** The four standard precedence relations. */
+export const DEPENDENCY_TYPES = ['FS', 'SS', 'FF', 'SF'];
+
+export const DEPENDENCY_LABELS = {
+  FS: 'Finish → Start',
+  SS: 'Start → Start',
+  FF: 'Finish → Finish',
+  SF: 'Start → Finish'
+};
+
+/**
+ * Dependencies are stored as `{ id, type, lag }`, but older project files hold
+ * a bare array of predecessor ids. Normalise either form.
+ */
+export function toDependency(entry) {
+  if (entry && typeof entry === 'object') {
+    const type = DEPENDENCY_TYPES.includes(entry.type) ? entry.type : 'FS';
+    const lag = Number(entry.lag);
+    return { id: String(entry.id), type, lag: Number.isFinite(lag) ? lag : 0 };
+  }
+  return { id: String(entry), type: 'FS', lag: 0 };
+}
+
+export function dependenciesOf(node) {
+  return (node.dependencies || []).map(toDependency);
+}
+
+/** Predecessor ids only — for reachability and display. */
+export function predecessorIds(node) {
+  return dependenciesOf(node).map(d => d.id);
+}
+
 /** Tasks of a diagram, flattened across its milestones. */
 export function nodesOf(diagram) {
   if (!diagram) return [];
@@ -65,6 +97,50 @@ export function durationOf(node, { mode, overrides, rollup } = {}) {
 }
 
 /**
+ * Earliest start the relation permits for the successor.
+ *
+ * FS  successor starts after predecessor finishes
+ * SS  successor starts after predecessor starts
+ * FF  successor finishes after predecessor finishes
+ * SF  successor finishes after predecessor starts
+ *
+ * The finish-constrained relations are expressed as a start by subtracting the
+ * successor's own duration.
+ */
+function earliestStart(type, predES, predEF, lag, succDuration) {
+  switch (type) {
+    case 'SS': return predES + lag;
+    case 'FF': return predEF + lag - succDuration;
+    case 'SF': return predES + lag - succDuration;
+    case 'FS':
+    default:   return predEF + lag;
+  }
+}
+
+/** Latest finish the relation permits for the predecessor. */
+function latestFinish(type, succLS, succLF, lag, predDuration) {
+  switch (type) {
+    case 'SS': return succLS - lag + predDuration;
+    case 'FF': return succLF - lag;
+    case 'SF': return succLF - lag + predDuration;
+    case 'FS':
+    default:   return succLS - lag;
+  }
+}
+
+/**
+ * Is this relation binding — driving the successor's start rather than having
+ * float in it? Used to colour the critical links.
+ */
+export function isDrivingLink(dep, metrics) {
+  const pred = metrics[dep.id];
+  const succ = metrics[dep.to];
+  if (!pred || !succ) return false;
+  const required = earliestStart(dep.type, pred.ES, pred.EF, dep.lag, succ.duration);
+  return Math.abs(succ.ES - required) < 1e-6;
+}
+
+/**
  * Build the adjacency structures and a topological order once, so callers that
  * schedule the same graph repeatedly (Monte Carlo) do not pay for it each run.
  *
@@ -84,10 +160,10 @@ export function compileGraph(nodes) {
   });
 
   nodes.forEach(n => {
-    const list = (n.dependencies || []).filter(d => known.has(d));
+    const list = dependenciesOf(n).filter(d => known.has(d.id));
     deps.set(n.id, list);
     indeg.set(n.id, list.length);
-    list.forEach(d => succs.get(d).push(n.id));
+    list.forEach(d => succs.get(d.id).push({ id: n.id, type: d.type, lag: d.lag }));
   });
 
   // Kahn's algorithm. A plain index cursor avoids the O(n²) shift() the
@@ -98,10 +174,10 @@ export function compileGraph(nodes) {
   for (let cursor = 0; cursor < queue.length; cursor++) {
     const u = queue[cursor];
     order.push(u);
-    succs.get(u).forEach(v => {
-      const left = pending.get(v) - 1;
-      pending.set(v, left);
-      if (left === 0) queue.push(v);
+    succs.get(u).forEach(s => {
+      const left = pending.get(s.id) - 1;
+      pending.set(s.id, left);
+      if (left === 0) queue.push(s.id);
     });
   }
 
@@ -111,22 +187,124 @@ export function compileGraph(nodes) {
   return { ids, deps, succs, order, cycleIds };
 }
 
+const TYPE_CODES = { FS: 0, SS: 1, FF: 2, SF: 3 };
+
 /**
- * Forward pass only. Monte Carlo needs the project duration and nothing else,
- * so it skips the backward pass and the per-run object allocation entirely.
+ * Flatten a compiled graph into typed arrays keyed by index rather than id.
+ *
+ * Monte Carlo runs this graph tens of thousands of times. Walking Maps and
+ * allocating per run dominated the cost; here every lookup is an array index
+ * and the working buffers are allocated once and reused.
  */
-export function projectDurationFor(graph, durations) {
-  const ef = new Map();
-  let total = 0;
-  for (const id of graph.order) {
-    let es = 0;
-    for (const dep of graph.deps.get(id)) {
-      const depEf = ef.get(dep);
-      if (depEf > es) es = depEf;
+export function indexGraph(graph) {
+  const index = new Map(graph.ids.map((id, i) => [id, i]));
+  const n = graph.ids.length;
+
+  const order = new Int32Array(graph.order.length);
+  graph.order.forEach((id, i) => { order[i] = index.get(id); });
+
+  function flatten(source, pick) {
+    const start = new Int32Array(n + 1);
+    let total = 0;
+    for (let i = 0; i < n; i++) {
+      start[i] = total;
+      total += (source.get(graph.ids[i]) || []).length;
     }
-    const finish = es + (durations.get(id) || 0);
-    ef.set(id, finish);
-    if (finish > total) total = finish;
+    start[n] = total;
+
+    const target = new Int32Array(total);
+    const type = new Int8Array(total);
+    const lag = new Float64Array(total);
+    let cursor = 0;
+    for (let i = 0; i < n; i++) {
+      for (const entry of source.get(graph.ids[i]) || []) {
+        target[cursor] = index.get(pick(entry));
+        type[cursor] = TYPE_CODES[entry.type] ?? 0;
+        lag[cursor] = entry.lag || 0;
+        cursor++;
+      }
+    }
+    return { start, target, type, lag };
+  }
+
+  return {
+    n,
+    ids: graph.ids,
+    order,
+    deps: flatten(graph.deps, d => d.id),
+    succs: flatten(graph.succs, s => s.id),
+    buffers: {
+      es: new Float64Array(n),
+      ef: new Float64Array(n),
+      ls: new Float64Array(n),
+      lf: new Float64Array(n)
+    }
+  };
+}
+
+/**
+ * One sampled schedule: forward pass, backward pass, and the resulting
+ * critical set, written into the caller's reusable buffers.
+ *
+ * @param {Float64Array} durations indexed like `indexed.ids`
+ * @param {Uint8Array} criticalOut set to 1 for tasks with zero float
+ * @returns {number} project duration for this sample
+ */
+export function scheduleSample(indexed, durations, criticalOut) {
+  const { order, deps, succs, buffers, n } = indexed;
+  const { es, ef, ls, lf } = buffers;
+  let total = 0;
+
+  for (let k = 0; k < order.length; k++) {
+    const i = order[k];
+    const duration = durations[i];
+    let start = 0;
+    for (let e = deps.start[i]; e < deps.start[i + 1]; e++) {
+      const p = deps.target[e];
+      const lag = deps.lag[e];
+      let required;
+      switch (deps.type[e]) {
+        case 1: required = es[p] + lag; break;
+        case 2: required = ef[p] + lag - duration; break;
+        case 3: required = es[p] + lag - duration; break;
+        default: required = ef[p] + lag;
+      }
+      if (required > start) start = required;
+    }
+    if (start < 0) start = 0;
+    es[i] = start;
+    ef[i] = start + duration;
+    if (ef[i] > total) total = ef[i];
+  }
+
+  for (let k = order.length - 1; k >= 0; k--) {
+    const i = order[k];
+    const duration = durations[i];
+    let finish = Infinity;
+    if (succs.start[i] === succs.start[i + 1]) {
+      finish = total;
+    } else {
+      for (let e = succs.start[i]; e < succs.start[i + 1]; e++) {
+        const s = succs.target[e];
+        const lag = succs.lag[e];
+        let allowed;
+        switch (succs.type[e]) {
+          case 1: allowed = ls[s] - lag + duration; break;
+          case 2: allowed = lf[s] - lag; break;
+          case 3: allowed = lf[s] - lag + duration; break;
+          default: allowed = ls[s] - lag;
+        }
+        if (allowed < finish) finish = allowed;
+      }
+    }
+    lf[i] = finish;
+    ls[i] = finish - duration;
+  }
+
+  if (criticalOut) {
+    for (let i = 0; i < n; i++) {
+      criticalOut[i] = Math.abs(ls[i] - es[i]) < 1e-6 ? 1 : 0;
+    }
   }
   return total;
 }
@@ -136,7 +314,7 @@ export function projectDurationFor(graph, durations) {
  * the critical set (slack of zero).
  *
  * @returns {{metrics: Object, projectDuration: number, criticalIds: Set<string>,
- *            order: string[], cycleIds: string[]}}
+ *            order: string[], cycleIds: string[], links: object[]}}
  */
 export function computeCPM(nodes, options = {}) {
   const graph = options.graph || compileGraph(nodes);
@@ -147,8 +325,13 @@ export function computeCPM(nodes, options = {}) {
       ...n,
       duration: durationOf(n, options),
       ES: 0, EF: 0, LS: 0, LF: 0, slack: 0,
-      successors: graph.succs.get(n.id) || []
+      successors: (graph.succs.get(n.id) || []).map(s => s.id)
     };
+  });
+
+  const links = [];
+  graph.deps.forEach((list, to) => {
+    list.forEach(d => links.push({ ...d, to }));
   });
 
   if (graph.cycleIds.length) {
@@ -157,18 +340,23 @@ export function computeCPM(nodes, options = {}) {
       projectDuration: 0,
       criticalIds: new Set(),
       order: [],
-      cycleIds: graph.cycleIds
+      cycleIds: graph.cycleIds,
+      links
     };
   }
 
   for (const id of graph.order) {
     const n = metrics[id];
-    let es = 0;
+    let start = 0;
     for (const dep of graph.deps.get(id)) {
-      if (metrics[dep].EF > es) es = metrics[dep].EF;
+      const pred = metrics[dep.id];
+      const required = earliestStart(dep.type, pred.ES, pred.EF, dep.lag, n.duration);
+      if (required > start) start = required;
     }
-    n.ES = es;
-    n.EF = es + n.duration;
+    // A lead (negative lag) on the first task could pull the schedule before
+    // day zero; the project cannot start before its own origin.
+    n.ES = Math.max(0, start);
+    n.EF = n.ES + n.duration;
   }
 
   let projectDuration = 0;
@@ -178,14 +366,17 @@ export function computeCPM(nodes, options = {}) {
 
   for (let i = graph.order.length - 1; i >= 0; i--) {
     const n = metrics[graph.order[i]];
-    if (!n.successors.length) {
+    const succ = graph.succs.get(n.id);
+    if (!succ.length) {
       n.LF = projectDuration;
     } else {
-      let lf = Infinity;
-      for (const s of n.successors) {
-        if (metrics[s].LS < lf) lf = metrics[s].LS;
+      let finish = Infinity;
+      for (const s of succ) {
+        const target = metrics[s.id];
+        const allowed = latestFinish(s.type, target.LS, target.LF, s.lag, n.duration);
+        if (allowed < finish) finish = allowed;
       }
-      n.LF = lf;
+      n.LF = finish;
     }
     n.LS = n.LF - n.duration;
     n.slack = +(n.LS - n.ES).toFixed(4);
@@ -197,7 +388,7 @@ export function computeCPM(nodes, options = {}) {
     if (metrics[id].slack === 0) criticalIds.add(id);
   }
 
-  return { metrics, projectDuration, criticalIds, order: graph.order, cycleIds: [] };
+  return { metrics, projectDuration, criticalIds, order: graph.order, cycleIds: [], links };
 }
 
 /**
@@ -207,7 +398,7 @@ export function computeCPM(nodes, options = {}) {
 export function wouldCreateCycle(fromId, toId, nodes) {
   const succs = new Map(nodes.map(n => [n.id, []]));
   nodes.forEach(n => {
-    (n.dependencies || []).forEach(dep => {
+    predecessorIds(n).forEach(dep => {
       if (succs.has(dep)) succs.get(dep).push(n.id);
     });
   });
@@ -229,19 +420,19 @@ export function traceFrom(nodeId, nodes) {
   const byId = new Map(nodes.map(n => [n.id, n]));
   const succs = new Map(nodes.map(n => [n.id, []]));
   nodes.forEach(n => {
-    (n.dependencies || []).forEach(d => {
+    predecessorIds(n).forEach(d => {
       if (succs.has(d)) succs.get(d).push(n.id);
     });
   });
 
   const ids = new Set([nodeId]);
 
-  const up = [...(byId.get(nodeId)?.dependencies || [])];
+  const up = [...predecessorIds(byId.get(nodeId) || {})];
   while (up.length) {
     const u = up.pop();
     if (ids.has(u)) continue;
     ids.add(u);
-    (byId.get(u)?.dependencies || []).forEach(d => up.push(d));
+    predecessorIds(byId.get(u) || {}).forEach(d => up.push(d));
   }
 
   const down = [...(succs.get(nodeId) || [])];

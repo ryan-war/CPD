@@ -1,15 +1,14 @@
 // vis-network canvas: data construction, drawing overlays, and interaction.
 
 import {
-  CRITICAL_COLOR, NODE_BG, NODE_BORDER, EDGE_COLOR, TRACE_COLOR, SEARCH_COLOR,
-  LANE_COLORS, COLUMN_GAP, LANE_ID_PREFIX, STATUS_COLORS, isLaneId
+  CRITICAL_COLOR, NEAR_CRITICAL_COLOR, TRACE_COLOR, SEARCH_COLOR, SELECTED_COLOR,
+  COLUMN_GAP, LANE_ID_PREFIX, STATUS_COLORS, MINIMAP_WIDTH, MINIMAP_HEIGHT,
+  isLaneId, paletteFor
 } from './config.js';
 import { $, toast } from './dom.js';
-import { traceFrom, wouldCreateCycle } from './cpm.js';
-import { schedule, fmt } from './schedule.js';
-import {
-  getState, currentDiagram, allNodes, findNode, displayOpts
-} from './state.js';
+import { traceFrom, wouldCreateCycle, dependenciesOf, isDrivingLink } from './cpm.js';
+import { schedule, fmt, getCriticality } from './schedule.js';
+import { getState, currentDiagram, allNodes, findNode, displayOpts } from './state.js';
 import { linkTooltip } from './links.js';
 
 let network = null;
@@ -19,28 +18,46 @@ let handlers = {};
 
 let connectMode = false;
 let connectSource = null;
-let selectedNodeId = null;
+let connectPointer = null;
+let selectedIds = [];
 let selectedEdgeId = null;
 let searchQuery = '';
 let traceIds = new Set();
 
 // Snapshots used by the per-frame draw callbacks. Rebuilt on sync rather than
-// read out of state on every animation frame, which is what the previous
-// implementation did while panning and zooming.
+// read out of state on every animation frame.
 let ringCache = [];
-let laneCount = 0;
+let laneCache = [];
+let palette = paletteFor('dark');
 
 export function getNetwork() {
   return network;
 }
 
 export function getSelection() {
-  return { nodeId: selectedNodeId, edgeId: selectedEdgeId };
+  return { nodeIds: selectedIds.slice(), nodeId: selectedIds[0] || null, edgeId: selectedEdgeId };
 }
 
 export function clearSelection() {
-  selectedNodeId = null;
+  selectedIds = [];
   selectedEdgeId = null;
+  if (network) network.unselectAll();
+}
+
+/** Select tasks from outside the canvas — used by the panel's selection sync. */
+export function selectNodes(ids, { focus = false } = {}) {
+  if (!network) return;
+  const known = new Set(allNodes().map(n => n.id));
+  selectedIds = ids.filter(id => known.has(id));
+  selectedEdgeId = null;
+  network.selectNodes(selectedIds, true);
+  if (focus && selectedIds.length === 1) {
+    network.focus(selectedIds[0], {
+      scale: Math.max(1, network.getScale()),
+      animation: { duration: 300, easingFunction: 'easeInOutQuad' }
+    });
+  }
+  refreshHighlights();
 }
 
 export function setSearchQuery(q) {
@@ -61,7 +78,7 @@ export function matchesSearch(node) {
 
 // ─── Labels ────────────────────────────────────────────────
 
-function buildNodeLabel(node, metric, mode) {
+function buildNodeLabel(node, metric, state, calendar) {
   const d = displayOpts();
   const lines = [];
   const hasLink = d.link && (node.linkedSubPage || node.linkedMainNode);
@@ -74,24 +91,65 @@ function buildNodeLabel(node, metric, mode) {
     lines.push(node.title.length > 22 ? node.title.slice(0, 20) + '…' : node.title);
   }
   if (d.minMax) {
-    if (mode === 'pert') {
+    if (state.estimationMode === 'pert') {
       const likely = node.likely != null ? node.likely : (Number(node.min) + Number(node.max)) / 2;
       lines.push(`O:${node.min} M:${fmt(likely)} P:${node.max}`);
     } else {
       lines.push(`Min:${node.min}d Max:${node.max}d`);
     }
   }
+  if (d.dates && calendar.enabled) {
+    lines.push(`${calendar.formatOffset(metric.ES)} → ${calendar.formatFinish(metric.ES, metric.duration)}`);
+  }
   if (d.esEf) lines.push(`ES:${fmt(metric.ES)} EF:${fmt(metric.EF)}`);
   if (d.lsLf) lines.push(`LS:${fmt(metric.LS)} LF:${fmt(metric.LF)}`);
   if (d.slack) lines.push(`Slack:${fmt(metric.slack)}`);
   if (d.progress) lines.push(`${Math.round(node.progress || 0)}%`);
 
+  if (d.criticality) {
+    const index = getCriticality()?.get(node.id);
+    if (index != null) lines.push(`Crit:${Math.round(index * 100)}%`);
+  }
+
   return lines.join('\n') || node.id;
 }
 
+/**
+ * Activity-on-node notation: a fixed grid where each figure always sits in the
+ * same position, so you read across tasks by location rather than parsing each
+ * label. Opt-in — circles remain the default.
+ */
+function buildBoxLabel(node, metric, calendar) {
+  const d = displayOpts();
+  const title = node.title && node.title.length > 18 ? node.title.slice(0, 17) + '…' : (node.title || '');
+  const lines = [
+    `${pad(fmt(metric.ES), 5)}│${pad(fmt(metric.duration), 6)}│${pad(fmt(metric.EF), 5)}`,
+    '─────┼──────┼─────',
+    center(`${node.id}${d.title && title ? ' ' + title : ''}`, 18),
+    '─────┼──────┼─────',
+    `${pad(fmt(metric.LS), 5)}│${pad(fmt(metric.slack), 6)}│${pad(fmt(metric.LF), 5)}`
+  ];
+  if (d.dates && calendar.enabled) {
+    lines.push(`${calendar.formatOffset(metric.ES)} → ${calendar.formatFinish(metric.ES, metric.duration)}`);
+  }
+  if (d.progress) lines.push(center(`${Math.round(node.progress || 0)}%`, 18));
+  return lines.join('\n');
+}
+
+function pad(text, width) {
+  const s = String(text);
+  const total = Math.max(0, width - s.length);
+  const left = Math.floor(total / 2);
+  return ' '.repeat(left) + s + ' '.repeat(total - left);
+}
+
+const center = pad;
+
 function nodeFontSize() {
   const d = displayOpts();
-  const count = ['title', 'minMax', 'esEf', 'lsLf', 'slack', 'progress'].filter(k => d[k]).length;
+  const count = ['title', 'minMax', 'esEf', 'lsLf', 'slack', 'progress', 'dates', 'criticality']
+    .filter(k => d[k]).length;
+  if (count >= 5) return 9;
   if (count >= 4) return 10;
   if (count >= 2) return 11;
   return 12;
@@ -99,111 +157,156 @@ function nodeFontSize() {
 
 // ─── Styling ───────────────────────────────────────────────
 //
-// Split out from data construction so hover and connect highlighting can
-// restyle individual items through DataSet.update() instead of rebuilding
-// every node and edge in the diagram.
+// Split out from data construction so hover, selection, and connect
+// highlighting can restyle individual items through DataSet.update() instead
+// of rebuilding every node and edge in the diagram.
 
-function nodeStyle(node, isCritical) {
+/**
+ * Border encodes schedule risk and interaction state, in priority order.
+ * Status lives on the fill instead, so the two never overwrite each other.
+ */
+function borderFor(node, isCritical, isNearCritical, flags) {
+  if (flags.isSource) return '#3b82f6';
+  if (flags.isSelected) return SELECTED_COLOR;
+  if (flags.isHit) return SEARCH_COLOR;
+  if (isCritical) return CRITICAL_COLOR;
+  if (isNearCritical) return NEAR_CRITICAL_COLOR;
+  if (flags.inTrace) return TRACE_COLOR;
+  return palette.nodeBorder;
+}
+
+/** Status as a translucent wash over the node background. */
+function fillFor(node, dimmed) {
+  const status = STATUS_COLORS[node.status];
+  if (!status || node.status === 'not_started') return palette.nodeBg;
+  return mix(palette.nodeBg, status, dimmed ? 0.08 : 0.22);
+}
+
+function mix(base, tint, amount) {
+  const a = hexToRgb(base);
+  const b = hexToRgb(tint);
+  if (!a || !b) return base;
+  const c = [0, 1, 2].map(i => Math.round(a[i] + (b[i] - a[i]) * amount));
+  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+}
+
+function hexToRgb(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(String(hex));
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : null;
+}
+
+function nodeStyle(node, isCritical, isNearCritical) {
   const tracing = traceIds.size > 0;
   const inTrace = tracing && traceIds.has(node.id);
   const dimmed = tracing && !inTrace;
-  const isHit = matchesSearch(node);
-  const isSource = connectMode && connectSource === node.id;
+  const flags = {
+    inTrace,
+    isHit: matchesSearch(node),
+    isSelected: selectedIds.includes(node.id),
+    isSource: connectMode && connectSource === node.id
+  };
 
-  let border = isCritical ? CRITICAL_COLOR : (STATUS_COLORS[node.status] || NODE_BORDER);
-  if (inTrace && !isCritical) border = TRACE_COLOR;
-  if (isHit) border = SEARCH_COLOR;
+  const border = borderFor(node, isCritical, isNearCritical, flags);
+  const background = flags.isSource ? mix(palette.nodeBg, '#3b82f6', 0.3) : fillFor(node, dimmed);
+  const emphasised = flags.isSelected || flags.isHit || flags.isSource || inTrace;
 
-  if (isSource) {
-    return {
-      opacity: 1,
-      borderWidth: 4,
-      color: {
-        background: '#172554',
-        border: '#3b82f6',
-        highlight: { background: '#1e3a8a', border: '#60a5fa' },
-        hover: { background: '#1e3a8a', border: '#60a5fa' }
-      },
-      shadow: { enabled: true, color: '#3b82f6', size: 16, x: 0, y: 0 },
-      font: { color: '#f1f5f9', size: nodeFontSize(), face: 'system-ui, sans-serif', multi: true, align: 'center' }
-    };
-  }
-
-  const accent = isHit ? SEARCH_COLOR : (isCritical ? CRITICAL_COLOR : '#94a3b8');
   return {
     opacity: dimmed ? 0.25 : 1,
-    borderWidth: isHit || inTrace ? 4 : (isCritical ? 3 : 2),
+    borderWidth: emphasised ? 4 : (isCritical || isNearCritical ? 3 : 2),
     color: {
-      background: NODE_BG,
+      background,
       border,
-      highlight: { background: '#334155', border: accent },
-      hover: { background: '#334155', border: accent }
+      highlight: { background: mix(background, palette.edgeHighlight, 0.15), border },
+      hover: { background: mix(background, palette.edgeHighlight, 0.12), border }
     },
-    shadow: isHit
-      ? { enabled: true, color: SEARCH_COLOR, size: 20, x: 0, y: 0 }
+    shadow: emphasised
+      ? { enabled: true, color: border, size: 18, x: 0, y: 0 }
       : isCritical
-        ? { enabled: true, color: CRITICAL_COLOR, size: 18, x: 0, y: 0 }
-        : { enabled: true, color: 'rgba(0,0,0,0.4)', size: 8, x: 0, y: 2 },
+        ? { enabled: true, color: CRITICAL_COLOR, size: 16, x: 0, y: 0 }
+        : isNearCritical
+          ? { enabled: true, color: NEAR_CRITICAL_COLOR, size: 12, x: 0, y: 0 }
+          : { enabled: true, color: palette.shadow, size: 8, x: 0, y: 2 },
     font: {
-      color: dimmed ? '#64748b' : '#f1f5f9',
+      color: dimmed ? palette.nodeTextDim : palette.nodeText,
       size: nodeFontSize(),
-      face: 'system-ui, sans-serif',
-      multi: true,
-      align: 'center',
-      bold: { color: '#f1f5f9', size: nodeFontSize() + 2 }
+      face: getState().nodeShape === 'box' ? 'monospace' : 'system-ui, sans-serif',
+      multi: false,
+      align: 'center'
     }
   };
 }
 
-function edgeStyle(fromId, toId, isCriticalEdge) {
+function edgeStyle(link, metrics, criticalIds) {
   const tracing = traceIds.size > 0;
-  const inTrace = tracing && traceIds.has(fromId) && traceIds.has(toId);
+  const inTrace = tracing && traceIds.has(link.id) && traceIds.has(link.to);
   const dimmed = tracing && !inTrace;
+  const critical = criticalIds.has(link.id) && criticalIds.has(link.to) &&
+    isDrivingLink(link, metrics);
+  const selected = selectedEdgeId === edgeId(link);
+
   return {
     color: {
-      color: inTrace ? TRACE_COLOR : (isCriticalEdge ? CRITICAL_COLOR : EDGE_COLOR),
+      color: selected ? SELECTED_COLOR : inTrace ? TRACE_COLOR : (critical ? CRITICAL_COLOR : palette.edge),
       opacity: dimmed ? 0.15 : 1,
-      highlight: isCriticalEdge ? CRITICAL_COLOR : '#94a3b8',
-      hover: isCriticalEdge ? CRITICAL_COLOR : '#94a3b8'
+      highlight: critical ? CRITICAL_COLOR : palette.edgeHighlight,
+      hover: critical ? CRITICAL_COLOR : palette.edgeHighlight
     },
-    width: inTrace ? 3.5 : (isCriticalEdge ? 3 : 1.5),
-    shadow: isCriticalEdge || inTrace
+    width: selected || inTrace ? 3.5 : (critical ? 3 : 1.5),
+    // Non finish-to-start relations are drawn dashed: they behave differently
+    // and should not be mistaken for ordinary sequence links.
+    dashes: link.type === 'FS' ? false : [6, 4],
+    label: edgeLabel(link),
+    font: {
+      size: 10,
+      color: palette.nodeTextDim,
+      strokeWidth: 3,
+      strokeColor: palette.canvasBg,
+      align: 'horizontal'
+    },
+    shadow: critical || inTrace
       ? { enabled: true, color: inTrace ? TRACE_COLOR : CRITICAL_COLOR, size: 10 }
       : false
   };
 }
 
-function isCriticalEdge(fromId, toId, metrics, criticalIds) {
-  return criticalIds.has(fromId) && criticalIds.has(toId) &&
-    Math.abs(metrics[toId].ES - metrics[fromId].EF) < 1e-6;
+function edgeLabel(link) {
+  const parts = [];
+  if (link.type !== 'FS') parts.push(link.type);
+  if (link.lag) parts.push(`${link.lag > 0 ? '+' : ''}${link.lag}d`);
+  return parts.join(' ');
+}
+
+export function edgeId(link) {
+  return `${link.id}->${link.to}`;
 }
 
 // ─── Data construction ─────────────────────────────────────
 
 export function buildVisData() {
   const state = getState();
-  const { metrics, criticalIds, nodes } = schedule();
+  const { metrics, criticalIds, nearCritical, nodes, links, calendar } = schedule();
   const diagram = currentDiagram();
+  const boxes = state.nodeShape === 'box';
   const visNodes = [];
 
   if (state.layoutMode === 'milestone') {
     (diagram.milestones || []).forEach((ms, i) => {
-      const lane = LANE_COLORS[i % LANE_COLORS.length];
+      const lane = palette.lanes[i % palette.lanes.length];
       visNodes.push({
         id: `${LANE_ID_PREFIX}${ms.id}`,
         label: ms.title,
         x: i * COLUMN_GAP,
-        y: -200,
+        y: -220,
         fixed: true,
         shape: 'box',
         margin: 10,
         widthConstraint: { maximum: COLUMN_GAP - 40 },
-        font: { color: '#cbd5e1', size: 13, face: 'system-ui, sans-serif', multi: false, bold: true },
+        font: { color: palette.laneText, size: 13, face: 'system-ui, sans-serif', bold: true },
         color: {
           background: lane,
-          border: '#64748b',
-          highlight: { background: lane, border: '#94a3b8' },
-          hover: { background: lane, border: '#94a3b8' }
+          border: palette.laneBorder,
+          highlight: { background: lane, border: palette.edgeHighlight },
+          hover: { background: lane, border: palette.edgeHighlight }
         },
         borderWidth: 1,
         shadow: false,
@@ -215,72 +318,91 @@ export function buildVisData() {
 
   nodes.forEach(node => {
     const metric = metrics[node.id];
-    const label = buildNodeLabel(node, metric, state.estimationMode);
+    const label = boxes
+      ? buildBoxLabel(node, metric, calendar)
+      : buildNodeLabel(node, metric, state, calendar);
     const lineCount = label.split('\n').length;
     const found = findNode(node.id);
+    const criticality = getCriticality()?.get(node.id);
+
     visNodes.push({
       id: node.id,
       label,
       x: node.position?.x ?? 0,
       y: node.position?.y ?? 0,
       fixed: false,
-      shape: 'circle',
-      size: Math.min(56, 32 + lineCount * 4),
-      ...nodeStyle(node, criticalIds.has(node.id)),
-      title: `${node.title}\n${node.description || ''}${linkTooltip(node)}\n` +
-        `Status: ${node.status || 'not_started'} · ${Math.round(node.progress || 0)}%\n` +
-        `Milestone: ${found?.milestone.title || '—'}\n` +
-        `Duration used: ${fmt(metric.duration)}d`
+      shape: boxes ? 'box' : 'circle',
+      ...(boxes
+        ? { margin: 8, widthConstraint: { minimum: 150 } }
+        : { size: Math.min(58, 32 + lineCount * 4) }),
+      ...nodeStyle(node, criticalIds.has(node.id), nearCritical.has(node.id)),
+      title: [
+        `${node.title}`,
+        node.description || '',
+        linkTooltip(node).trim(),
+        `Status: ${node.status || 'not_started'} · ${Math.round(node.progress || 0)}%`,
+        `Milestone: ${found?.milestone.title || '—'}`,
+        `Duration used: ${fmt(metric.duration)}d`,
+        calendar.enabled
+          ? `Dates: ${calendar.formatOffset(metric.ES)} → ${calendar.formatFinish(metric.ES, metric.duration)}`
+          : '',
+        criticality != null ? `Critical in ${Math.round(criticality * 100)}% of simulated runs` : ''
+      ].filter(Boolean).join('\n')
     });
   });
 
-  const visEdges = [];
-  nodes.forEach(node => {
-    (node.dependencies || []).forEach(dep => {
-      if (!metrics[dep]) return;
-      visEdges.push({
-        id: `${dep}->${node.id}`,
-        from: dep,
-        to: node.id,
-        arrows: { to: { enabled: true, scaleFactor: 0.7 } },
-        smooth: { type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.4 },
-        ...edgeStyle(dep, node.id, isCriticalEdge(dep, node.id, metrics, criticalIds))
-      });
-    });
-  });
+  const visEdges = links
+    .filter(link => metrics[link.id])
+    .map(link => ({
+      id: edgeId(link),
+      from: link.id,
+      to: link.to,
+      arrows: { to: { enabled: true, scaleFactor: 0.7 } },
+      smooth: { type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.4 },
+      ...edgeStyle(link, metrics, criticalIds)
+    }));
 
   return { visNodes, visEdges };
 }
 
 /** Cache what the draw callbacks need so they never touch state per frame. */
 function rebuildDrawCache() {
-  ringCache = allNodes().map(n => {
+  const state = getState();
+  const criticality = getCriticality();
+  ringCache = state.nodeShape === 'box' ? [] : allNodes().map(n => {
     const visNode = nodesDS.get(n.id);
     return {
       id: n.id,
       radius: (visNode?.size || 40) + 6,
       progress: Math.max(0, Math.min(100, Number(n.progress) || 0)) / 100,
-      color: STATUS_COLORS[n.status] || NODE_BORDER
+      color: STATUS_COLORS[n.status] || palette.nodeBorder,
+      criticality: criticality?.get(n.id) ?? null
     };
   });
-  laneCount = getState().layoutMode === 'milestone'
-    ? (currentDiagram().milestones || []).length
-    : 0;
+
+  laneCache = state.layoutMode === 'milestone'
+    ? (currentDiagram().milestones || []).map((ms, i) => ({ index: i, title: ms.title }))
+    : [];
 }
 
 export function applyVisData() {
+  palette = paletteFor(getState().theme);
   const { visNodes, visEdges } = buildVisData();
   nodesDS.clear();
   edgesDS.clear();
   nodesDS.add(visNodes);
   edgesDS.add(visEdges);
   rebuildDrawCache();
+  if (network) {
+    network.setOptions({ nodes: { shape: getState().nodeShape === 'box' ? 'box' : 'circle' } });
+  }
+  drawMinimap();
 }
 
 // ─── Drawing overlays ──────────────────────────────────────
 
 function drawLanes(ctx) {
-  const count = laneCount;
+  const count = laneCache.length;
   if (count < 1) return;
   const scale = network.getScale() || 1;
 
@@ -288,13 +410,11 @@ function drawLanes(ctx) {
   // columns under pan and zoom. A DOM overlay cannot do this — it drifted out
   // of alignment as soon as the view moved.
   ctx.save();
-  for (let i = 0; i < count; i++) {
-    if (i % 2 === 0) {
-      ctx.fillStyle = 'rgba(30, 41, 59, 0.35)';
-      ctx.fillRect(i * COLUMN_GAP - COLUMN_GAP / 2, -2000, COLUMN_GAP, 4000);
-    }
+  ctx.fillStyle = palette.laneBand;
+  for (let i = 0; i < count; i += 2) {
+    ctx.fillRect(i * COLUMN_GAP - COLUMN_GAP / 2, -2000, COLUMN_GAP, 4000);
   }
-  ctx.strokeStyle = 'rgba(100, 116, 139, 0.65)';
+  ctx.strokeStyle = palette.laneDivider;
   ctx.lineWidth = 1.5 / scale;
   ctx.setLineDash([6, 6]);
   for (let i = 0; i < count - 1; i++) {
@@ -318,7 +438,7 @@ function drawProgressRings(ctx) {
   for (const entry of ringCache) {
     const pos = positions[entry.id];
     if (!pos) continue;
-    ctx.strokeStyle = 'rgba(51, 65, 85, 0.9)';
+    ctx.strokeStyle = palette.ringTrack;
     ctx.beginPath();
     ctx.arc(pos.x, pos.y, entry.radius, 0, Math.PI * 2);
     ctx.stroke();
@@ -328,8 +448,107 @@ function drawProgressRings(ctx) {
       ctx.arc(pos.x, pos.y, entry.radius, -Math.PI / 2, -Math.PI / 2 + entry.progress * Math.PI * 2);
       ctx.stroke();
     }
+    // Simulated criticality as a second, outer arc.
+    if (entry.criticality != null && entry.criticality > 0) {
+      ctx.strokeStyle = CRITICAL_COLOR;
+      ctx.globalAlpha = 0.75;
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, entry.radius + 5, -Math.PI / 2, -Math.PI / 2 + entry.criticality * Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
   }
   ctx.restore();
+}
+
+/** Rubber-band line from the chosen predecessor to the pointer. */
+function drawConnectPreview(ctx) {
+  if (!connectMode || !connectSource || !connectPointer) return;
+  const from = network.getPositions([connectSource])[connectSource];
+  if (!from) return;
+  ctx.save();
+  ctx.strokeStyle = '#3b82f6';
+  ctx.lineWidth = 2 / (network.getScale() || 1);
+  ctx.setLineDash([8, 6]);
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(connectPointer.x, connectPointer.y);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ─── Minimap ───────────────────────────────────────────────
+
+/**
+ * An overview of the whole network with the current viewport marked. The
+ * canvas has no navigation buttons and no other way to recover once you have
+ * panned away from the tasks.
+ */
+export function drawMinimap() {
+  const canvas = $('minimap');
+  if (!canvas || !network) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = MINIMAP_WIDTH * dpr;
+  canvas.height = MINIMAP_HEIGHT * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, MINIMAP_WIDTH, MINIMAP_HEIGHT);
+
+  const nodes = allNodes();
+  if (!nodes.length) {
+    canvas.classList.add('hidden');
+    return;
+  }
+  canvas.classList.remove('hidden');
+
+  const positions = network.getPositions();
+  const pts = nodes.map(n => positions[n.id]).filter(Boolean);
+  if (!pts.length) return;
+
+  const pad = 60;
+  const minX = Math.min(...pts.map(p => p.x)) - pad;
+  const maxX = Math.max(...pts.map(p => p.x)) + pad;
+  const minY = Math.min(...pts.map(p => p.y)) - pad;
+  const maxY = Math.max(...pts.map(p => p.y)) + pad;
+  const scale = Math.min(MINIMAP_WIDTH / (maxX - minX), MINIMAP_HEIGHT / (maxY - minY));
+  const offX = (MINIMAP_WIDTH - (maxX - minX) * scale) / 2;
+  const offY = (MINIMAP_HEIGHT - (maxY - minY) * scale) / 2;
+  const project = p => ({ x: (p.x - minX) * scale + offX, y: (p.y - minY) * scale + offY });
+
+  const { criticalIds } = schedule();
+  ctx.fillStyle = palette.canvasBg;
+  ctx.fillRect(0, 0, MINIMAP_WIDTH, MINIMAP_HEIGHT);
+
+  nodes.forEach(n => {
+    const p = positions[n.id];
+    if (!p) return;
+    const { x, y } = project(p);
+    ctx.fillStyle = criticalIds.has(n.id) ? CRITICAL_COLOR : palette.edge;
+    ctx.beginPath();
+    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // Viewport rectangle.
+  const container = $('network-canvas');
+  const view = network.getViewPosition();
+  const zoom = network.getScale() || 1;
+  const halfW = container.clientWidth / (2 * zoom);
+  const halfH = container.clientHeight / (2 * zoom);
+  const tl = project({ x: view.x - halfW, y: view.y - halfH });
+  const br = project({ x: view.x + halfW, y: view.y + halfH });
+  // Zoomed out far enough, the viewport is larger than the whole graph and the
+  // rectangle would spill outside the map.
+  const clampX = v => Math.min(MINIMAP_WIDTH - 1, Math.max(1, v));
+  const clampY = v => Math.min(MINIMAP_HEIGHT - 1, Math.max(1, v));
+  ctx.strokeStyle = SEARCH_COLOR;
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(
+    clampX(tl.x), clampY(tl.y),
+    clampX(br.x) - clampX(tl.x), clampY(br.y) - clampY(tl.y)
+  );
+
+  canvas._project = { minX, minY, scale, offX, offY };
 }
 
 // ─── Hover trace ───────────────────────────────────────────
@@ -340,20 +559,14 @@ function drawProgressRings(ctx) {
 // on every single mouse move between tasks.
 
 function restyleAll() {
-  const { metrics, criticalIds, nodes } = schedule();
-  const nodeUpdates = nodes.map(n => ({ id: n.id, ...nodeStyle(n, criticalIds.has(n.id)) }));
-  const edgeUpdates = [];
-  nodes.forEach(n => {
-    (n.dependencies || []).forEach(dep => {
-      if (!metrics[dep]) return;
-      edgeUpdates.push({
-        id: `${dep}->${n.id}`,
-        ...edgeStyle(dep, n.id, isCriticalEdge(dep, n.id, metrics, criticalIds))
-      });
-    });
-  });
-  nodesDS.update(nodeUpdates);
-  edgesDS.update(edgeUpdates);
+  const { metrics, criticalIds, nearCritical, nodes, links } = schedule();
+  nodesDS.update(nodes.map(n => ({
+    id: n.id,
+    ...nodeStyle(n, criticalIds.has(n.id), nearCritical.has(n.id))
+  })));
+  edgesDS.update(
+    links.filter(l => metrics[l.id]).map(l => ({ id: edgeId(l), ...edgeStyle(l, metrics, criticalIds) }))
+  );
 }
 
 function setTrace(ids) {
@@ -384,20 +597,19 @@ export function setConnectMode(on) {
   const changed = connectMode !== on;
   connectMode = on;
   connectSource = null;
+  connectPointer = null;
 
   const btn = $('btn-connect');
   const hint = $('connect-hint');
   if (btn) {
-    btn.classList.toggle('bg-blue-600', on);
-    btn.classList.toggle('border-blue-500', on);
-    btn.classList.toggle('text-white', on);
-    btn.classList.toggle('bg-slate-900', !on);
+    btn.classList.toggle('tool-btn-connect', on);
     btn.setAttribute('aria-pressed', String(on));
   }
   if (hint) hint.classList.toggle('hidden', !on);
 
   if (network) {
     network.setOptions({ interaction: { dragNodes: !on, hover: true } });
+    network.redraw();
   }
   if (changed || !on) restyleAll();
 }
@@ -407,7 +619,7 @@ function addDependency(fromId, toId) {
   const found = findNode(toId);
   if (!found) return;
 
-  if ((found.node.dependencies || []).includes(fromId)) {
+  if (dependenciesOf(found.node).some(d => d.id === fromId)) {
     toast('Dependency already exists', 'info');
     return;
   }
@@ -416,7 +628,7 @@ function addDependency(fromId, toId) {
     return;
   }
 
-  found.node.dependencies = [...(found.node.dependencies || []), fromId];
+  found.node.dependencies = [...(found.node.dependencies || []), { id: fromId, type: 'FS', lag: 0 }];
   handlers.onChange(`Connected ${fromId} → ${toId}`);
 }
 
@@ -424,6 +636,7 @@ function addDependency(fromId, toId) {
 
 export function initNetwork(container, callbacks) {
   handlers = callbacks;
+  palette = paletteFor(getState().theme);
   nodesDS = new vis.DataSet([]);
   edgesDS = new vis.DataSet([]);
 
@@ -431,10 +644,10 @@ export function initNetwork(container, callbacks) {
     physics: { enabled: false },
     interaction: {
       hover: true,
-      multiselect: false,
+      multiselect: true,
       navigationButtons: false,
       keyboard: false,
-      selectConnectedEdges: true
+      selectConnectedEdges: false
     },
     manipulation: { enabled: false, initiallyActive: false },
     edges: { selectionWidth: 2, hoverWidth: 1.5 },
@@ -442,13 +655,27 @@ export function initNetwork(container, callbacks) {
   });
 
   network.on('beforeDrawing', drawLanes);
-  network.on('afterDrawing', drawProgressRings);
+  network.on('afterDrawing', ctx => {
+    drawProgressRings(ctx);
+    drawConnectPreview(ctx);
+  });
 
   network.on('hoverNode', params => {
     if (connectMode || isLaneId(params.node)) return;
     setTrace(traceFrom(params.node, allNodes()));
   });
   network.on('blurNode', clearTrace);
+
+  // Rubber-band preview while choosing a successor.
+  container.addEventListener('pointermove', event => {
+    if (!connectMode || !connectSource) return;
+    const rect = container.getBoundingClientRect();
+    connectPointer = network.DOMtoCanvas({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top
+    });
+    network.redraw();
+  });
 
   network.on('dragEnd', params => {
     if (!params.nodes.length) return;
@@ -472,16 +699,27 @@ export function initNetwork(container, callbacks) {
   });
 
   network.on('selectNode', params => {
-    const id = params.nodes[0] || null;
-    selectedNodeId = id && !isLaneId(id) ? id : null;
+    selectedIds = params.nodes.filter(id => !isLaneId(id));
     selectedEdgeId = null;
+    handlers.onSelectionChange(selectedIds);
+    restyleAll();
   });
   network.on('selectEdge', params => {
+    if (params.nodes.length) return;
     selectedEdgeId = params.edges[0] || null;
-    if (!params.nodes.length) selectedNodeId = null;
+    selectedIds = [];
+    handlers.onSelectionChange([]);
+    restyleAll();
   });
-  network.on('deselectNode', () => { selectedNodeId = null; });
-  network.on('deselectEdge', () => { selectedEdgeId = null; });
+  network.on('deselectNode', () => {
+    selectedIds = [];
+    handlers.onSelectionChange([]);
+    restyleAll();
+  });
+  network.on('deselectEdge', () => {
+    selectedEdgeId = null;
+    restyleAll();
+  });
 
   network.on('doubleClick', params => {
     if (connectMode) return;
@@ -492,7 +730,9 @@ export function initNetwork(container, callbacks) {
       const evt = params.event.srcEvent;
       if ((evt.altKey || evt.metaKey) && found && handlers.onFollowLink(found.node)) return;
       handlers.onEditNode(id);
-    } else if (!params.edges.length) {
+    } else if (params.edges.length) {
+      handlers.onEditEdge(params.edges[0]);
+    } else {
       handlers.onAddNodeAt(params.pointer.canvas.x, params.pointer.canvas.y);
     }
   });
@@ -512,6 +752,7 @@ export function initNetwork(container, callbacks) {
     if (!params.nodes.length) {
       if (connectSource) {
         connectSource = null;
+        connectPointer = null;
         restyleAll();
         toast('Connection cancelled', 'info');
       }
@@ -524,27 +765,44 @@ export function initNetwork(container, callbacks) {
     if (!connectSource) {
       connectSource = clicked;
       restyleAll();
-      toast(`From ${clicked} — click the successor task`, 'info');
+      toast(`From ${clicked} — select the successor task`, 'info');
     } else if (connectSource === clicked) {
       connectSource = null;
+      connectPointer = null;
       restyleAll();
       toast('Source cleared', 'info');
     } else {
       const from = connectSource;
       connectSource = null;
+      connectPointer = null;
       addDependency(from, clicked);
     }
   });
 
+  network.on('zoom', drawMinimap);
+  network.on('dragging', drawMinimap);
+  network.on('animationFinished', drawMinimap);
+
   return network;
 }
 
+// ─── View controls ─────────────────────────────────────────
+
 export function fitView(duration = 400) {
   if (!network) return;
-  window.setTimeout(
-    () => network.fit({ animation: { duration, easingFunction: 'easeInOutQuad' } }),
-    50
-  );
+  window.setTimeout(() => {
+    network.fit({ animation: { duration, easingFunction: 'easeInOutQuad' } });
+    window.setTimeout(drawMinimap, duration + 30);
+  }, 50);
+}
+
+export function zoomBy(factor) {
+  if (!network) return;
+  network.moveTo({
+    scale: Math.min(4, Math.max(0.1, (network.getScale() || 1) * factor)),
+    animation: { duration: 180, easingFunction: 'easeInOutQuad' }
+  });
+  window.setTimeout(drawMinimap, 220);
 }
 
 export function focusNode(id, scale = 1.2) {
@@ -552,8 +810,10 @@ export function focusNode(id, scale = 1.2) {
   window.setTimeout(() => {
     try {
       network.selectNodes([id]);
+      selectedIds = [id];
       network.focus(id, { scale, animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
-      selectedNodeId = id;
+      handlers.onSelectionChange?.(selectedIds);
+      restyleAll();
     } catch {
       // node may have been removed between scheduling and running
     }
@@ -561,7 +821,10 @@ export function focusNode(id, scale = 1.2) {
 }
 
 export function redraw() {
-  if (network) network.redraw();
+  if (network) {
+    network.redraw();
+    drawMinimap();
+  }
 }
 
 export function savePositionsFromNetwork() {
@@ -572,4 +835,37 @@ export function savePositionsFromNetwork() {
   nodes.forEach(n => {
     if (positions[n.id]) n.position = { x: positions[n.id].x, y: positions[n.id].y };
   });
+}
+
+/**
+ * Render the entire network to an off-screen image at higher resolution.
+ * The visible canvas only ever holds the current viewport, so exporting it
+ * directly produced a cropped screenshot at whatever zoom happened to be set.
+ */
+export function renderFullImage(scaleFactor = 2) {
+  if (!network) return null;
+  const container = $('network-canvas');
+  const source = container.querySelector('canvas');
+  if (!source) return null;
+
+  const previousPosition = network.getViewPosition();
+  const previousScale = network.getScale();
+
+  network.fit({ animation: false });
+  network.redraw();
+
+  const out = document.createElement('canvas');
+  out.width = source.width * scaleFactor;
+  out.height = source.height * scaleFactor;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = palette.canvasBg;
+  ctx.fillRect(0, 0, out.width, out.height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, 0, 0, out.width, out.height);
+
+  network.moveTo({ position: previousPosition, scale: previousScale, animation: false });
+  network.redraw();
+
+  return out;
 }

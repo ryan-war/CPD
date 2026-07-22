@@ -1,22 +1,34 @@
-// Project import/export and diagram image export.
+// Project import/export, image export, and CSV export.
 
 import { $, toast } from './dom.js';
-import { getState, setState, normalizeState, seedHistory } from './state.js';
+import { getState, setState, normalizeState, seedHistory, pageTitle } from './state.js';
+import { fmt } from './schedule.js';
+import { dependenciesOf, nodesOf, computeCPM, createRollup } from './cpm.js';
+import { createCalendar, toISODate } from './calendar.js';
+import { renderFullImage } from './network.js';
 
 function safeFilename(title, fallback) {
   return (String(title || '').replace(/[^\w\-]+/g, '_').replace(/^_+|_+$/g, '') || fallback);
 }
 
-export function saveJSON() {
-  const state = getState();
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
+function download(blobOrUrl, filename) {
+  const url = typeof blobOrUrl === 'string' ? blobOrUrl : URL.createObjectURL(blobOrUrl);
   const a = document.createElement('a');
   a.href = url;
-  a.download = safeFilename(state.projectTitle, 'cpm_project') + '.json';
+  a.download = filename;
   a.click();
-  // Revoking immediately can cancel the download in some browsers.
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  if (typeof blobOrUrl !== 'string') {
+    // Revoking immediately can cancel the download in some browsers.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+
+export function saveJSON() {
+  const state = getState();
+  download(
+    new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }),
+    safeFilename(state.projectTitle, 'cpm_project') + '.json'
+  );
   toast('Project JSON downloaded', 'success');
 }
 
@@ -38,33 +50,105 @@ export function loadJSON(file, onLoaded) {
 }
 
 /**
- * Export the canvas as a PNG.
- * The source canvas is transparent, so it is composited onto the diagram
- * background first — otherwise the file looks empty in most image viewers.
+ * Export the whole diagram at 2× resolution.
+ *
+ * The visible canvas only ever contains the current viewport, so exporting it
+ * directly produced a screenshot cropped to whatever happened to be on screen
+ * at whatever zoom was set. This fits the graph first and upscales.
  */
 export function exportPNG() {
   try {
-    const canvas = document.querySelector('#network-canvas canvas');
-    if (!canvas) {
+    const out = renderFullImage(2);
+    if (!out) {
       toast('Canvas not ready', 'error');
       return;
     }
-    const out = document.createElement('canvas');
-    out.width = canvas.width;
-    out.height = canvas.height;
-    const ctx = out.getContext('2d');
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(0, 0, out.width, out.height);
-    ctx.drawImage(canvas, 0, 0);
-
-    const a = document.createElement('a');
-    a.href = out.toDataURL('image/png');
-    a.download = safeFilename(getState().projectTitle, 'diagram') + '.png';
-    a.click();
+    download(out.toDataURL('image/png'), safeFilename(getState().projectTitle, 'diagram') + '.png');
     toast('PNG exported', 'success');
   } catch (err) {
     toast('Export failed: ' + err.message, 'error');
   }
+}
+
+// ─── CSV ───────────────────────────────────────────────────
+
+function csvCell(value) {
+  const text = String(value ?? '');
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function csvRows(rows) {
+  return rows.map(r => r.map(csvCell).join(',')).join('\r\n');
+}
+
+/**
+ * Every task on every page, with its computed schedule. Each page is costed
+ * with its own roll-up so sub-path figures match what the interface shows.
+ */
+export function exportCSV() {
+  const state = getState();
+  const rollup = createRollup(state.diagrams, state.estimationMode);
+  const calendar = createCalendar(state.calendar);
+  const useDates = calendar.enabled;
+
+  const header = [
+    'Page', 'Milestone', 'Task ID', 'Title', 'Description', 'Status', 'Progress %',
+    'Optimistic', 'Most Likely', 'Pessimistic', 'Duration',
+    'ES', 'EF', 'LS', 'LF', 'Slack', 'Critical',
+    ...(useDates ? ['Start Date', 'Finish Date'] : []),
+    'Predecessors', 'Linked Sub-Page', 'Linked Main Task'
+  ];
+
+  const rows = [header];
+
+  (state.pageOrder || []).forEach(pageId => {
+    const diagram = state.diagrams[pageId];
+    if (!diagram) return;
+    const nodes = nodesOf(diagram);
+    if (!nodes.length) return;
+    const { metrics, criticalIds } = computeCPM(nodes, { mode: state.estimationMode, rollup });
+
+    (diagram.milestones || []).forEach(ms => {
+      (ms.nodes || []).forEach(node => {
+        const m = metrics[node.id] || {};
+        rows.push([
+          pageTitle(pageId),
+          ms.title,
+          node.id,
+          node.title,
+          node.description || '',
+          node.status || 'not_started',
+          Math.round(node.progress || 0),
+          node.min,
+          node.likely ?? '',
+          node.max,
+          fmt(m.duration),
+          fmt(m.ES), fmt(m.EF), fmt(m.LS), fmt(m.LF), fmt(m.slack),
+          criticalIds.has(node.id) ? 'yes' : 'no',
+          ...(useDates
+            ? [toISODate(calendar.offsetToDate(m.ES)), toISODate(calendar.finishDate(m.ES, m.duration))]
+            : []),
+          dependenciesOf(node)
+            .map(d => (d.type === 'FS' && !d.lag) ? d.id : `${d.id}(${d.type}${d.lag ? (d.lag > 0 ? '+' : '') + d.lag : ''})`)
+            .join(' '),
+          node.linkedSubPage ? pageTitle(node.linkedSubPage) : '',
+          node.linkedMainNode || ''
+        ]);
+      });
+    });
+  });
+
+  if (rows.length === 1) {
+    toast('No tasks to export', 'info');
+    return;
+  }
+
+  // The BOM makes Excel read it as UTF-8 rather than the system codepage.
+  download(
+    new Blob(['﻿' + csvRows(rows)], { type: 'text/csv;charset=utf-8' }),
+    safeFilename(getState().projectTitle, 'cpm_project') + '.csv'
+  );
+  toast(`Exported ${rows.length - 1} tasks to CSV`, 'success');
 }
 
 export function bindFileInput(onLoaded) {

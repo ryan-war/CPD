@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full">
+<html lang="en" class="h-full" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Critical Path Network</title>
-  <meta name="description" content="Browser-based critical path method planner with PERT estimation, Gantt timeline, and Monte Carlo schedule risk analysis." />
+  <meta name="description" content="Browser-based critical path method planner with PERT estimation, working-day calendars, Gantt timeline, and Monte Carlo schedule risk analysis." />
   <!-- Versions are pinned: floating CDN tags upgrade without warning and can
        break the deployed page. -->
   <script src="https://cdn.tailwindcss.com/3.4.16"></script>
@@ -12,122 +12,146 @@
   <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
   <link rel="stylesheet" href="css/app.css" />
 </head>
-<body class="h-full bg-slate-900 text-slate-100 font-sans antialiased">
+<body class="h-full antialiased">
   <div id="app" class="h-full flex flex-col">
 
     <!-- Top bar -->
-    <header class="flex-shrink-0 border-b border-slate-700 bg-slate-800 px-3 py-2 relative z-50">
+    <header id="app-header">
       <div class="flex flex-wrap items-center gap-2 justify-between">
         <div class="flex items-center gap-3 min-w-0">
           <div class="flex items-center gap-2">
-            <i data-lucide="git-branch" class="w-5 h-5 text-[#ff4d4d]" aria-hidden="true"></i>
-            <h1 id="project-title"
-                class="text-sm font-semibold tracking-wide truncate max-w-[200px] rounded px-1"
-                contenteditable="true" spellcheck="false"
+            <i data-lucide="git-branch" class="w-5 h-5 text-critical" aria-hidden="true"></i>
+            <h1 id="project-title" class="project-title" contenteditable="true" spellcheck="false"
                 role="textbox" aria-label="Project title">Critical Path Network</h1>
           </div>
-          <nav id="page-tabs" role="tablist" aria-label="Diagram pages"
-               class="flex items-center gap-1 bg-slate-900/60 rounded-lg p-0.5 border border-slate-700 max-w-[min(100%,520px)] overflow-x-auto"></nav>
-          <button type="button" id="btn-add-subpath" title="Add sub-path"
-                  class="shrink-0 px-2 py-1.5 text-xs rounded-md border border-dashed border-slate-600 text-slate-400 hover:text-slate-200 hover:border-slate-400 flex items-center gap-1">
+          <nav id="page-tabs" role="tablist" aria-label="Diagram pages"></nav>
+          <button type="button" id="btn-add-subpath" title="Add sub-path" class="btn-dashed">
             <i data-lucide="plus" class="w-3.5 h-3.5" aria-hidden="true"></i> Sub-Path
           </button>
         </div>
 
         <div id="toolbar-actions" class="flex items-center gap-1.5 flex-wrap">
-          <button type="button" id="btn-connect" title="Connection mode (c)" aria-pressed="false"
-                  class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+          <button type="button" id="btn-connect" title="Connection mode (c)" aria-pressed="false" class="tool-btn">
             <i data-lucide="link" class="w-3.5 h-3.5" aria-hidden="true"></i> Connect
           </button>
-          <button type="button" id="btn-add-node" title="Add task"
-                  class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+          <button type="button" id="btn-add-node" title="Add task (n)" class="tool-btn">
             <i data-lucide="plus" class="w-3.5 h-3.5" aria-hidden="true"></i> Add Task
           </button>
-          <button type="button" id="btn-fit" title="Reset zoom"
-                  class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+          <button type="button" id="btn-fit" title="Fit to view (f)" class="tool-btn">
             <i data-lucide="maximize" class="w-3.5 h-3.5" aria-hidden="true"></i> Fit
           </button>
 
-          <button type="button" id="btn-auto-layout" data-secondary title="CPM hierarchical layout" aria-pressed="false"
-                  class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+          <button type="button" id="btn-auto-layout" data-secondary title="CPM hierarchical layout" aria-pressed="false" class="tool-btn">
             <i data-lucide="layout-dashboard" class="w-3.5 h-3.5" aria-hidden="true"></i> Auto-Layout
           </button>
-          <button type="button" id="btn-milestone-layout" data-secondary title="Columns view — tasks and cards aligned by milestone" aria-pressed="false"
-                  class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+          <button type="button" id="btn-milestone-layout" data-secondary title="Columns view — tasks and cards aligned by milestone" aria-pressed="false" class="tool-btn">
             <i data-lucide="columns-3" class="w-3.5 h-3.5" aria-hidden="true"></i> Columns
           </button>
           <button type="button" id="btn-display" data-secondary title="Task display options"
-                  aria-haspopup="true" aria-expanded="false" aria-controls="display-menu"
-                  class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+                  aria-haspopup="true" aria-expanded="false" aria-controls="display-menu" class="tool-btn">
             <i data-lucide="eye" class="w-3.5 h-3.5" aria-hidden="true"></i> Display
           </button>
-          <button type="button" id="btn-pert" data-secondary title="Toggle PERT estimation (O + 4M + P) / 6" aria-pressed="false"
-                  class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+          <button type="button" id="btn-pert" data-secondary title="Toggle PERT estimation (O + 4M + P) / 6" aria-pressed="false" class="tool-btn">
             <i data-lucide="calculator" class="w-3.5 h-3.5" aria-hidden="true"></i> PERT
           </button>
-          <button type="button" id="btn-gantt" data-secondary title="Toggle mini-Gantt" aria-pressed="false"
-                  class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+          <button type="button" id="btn-gantt" data-secondary title="Toggle mini-Gantt" aria-pressed="false" class="tool-btn">
             <i data-lucide="bar-chart-3" class="w-3.5 h-3.5" aria-hidden="true"></i> Gantt
           </button>
-          <button type="button" id="btn-monte" data-secondary title="Monte Carlo risk simulation"
-                  class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+          <button type="button" id="btn-monte" data-secondary title="Monte Carlo risk simulation" class="tool-btn">
             <i data-lucide="dices" class="w-3.5 h-3.5" aria-hidden="true"></i> Simulate
           </button>
-          <button type="button" id="btn-save" data-secondary title="Save project as JSON"
-                  class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+          <button type="button" id="btn-baseline" data-secondary title="Capture the current schedule as the baseline" class="tool-btn">
+            <i data-lucide="flag" class="w-3.5 h-3.5" aria-hidden="true"></i> Set Baseline
+          </button>
+          <button type="button" id="btn-settings" data-secondary title="Project settings — calendar, risk threshold, task shape" class="tool-btn">
+            <i data-lucide="settings" class="w-3.5 h-3.5" aria-hidden="true"></i> Settings
+          </button>
+          <button type="button" id="btn-save" data-secondary title="Save project as JSON" class="tool-btn">
             <i data-lucide="download" class="w-3.5 h-3.5" aria-hidden="true"></i> Save JSON
           </button>
-          <label data-secondary class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5 cursor-pointer">
+          <label data-secondary class="tool-btn cursor-pointer">
             <i data-lucide="upload" class="w-3.5 h-3.5" aria-hidden="true"></i> Load JSON
             <input id="file-input" type="file" accept=".json,application/json" class="sr-only" />
           </label>
-          <button type="button" id="btn-export-png" data-secondary title="Export diagram as PNG"
-                  class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+          <button type="button" id="btn-export-png" data-secondary title="Export the whole diagram as PNG" class="tool-btn">
             <i data-lucide="image" class="w-3.5 h-3.5" aria-hidden="true"></i> Export PNG
+          </button>
+          <button type="button" id="btn-export-csv" data-secondary title="Export the schedule as CSV" class="tool-btn">
+            <i data-lucide="table" class="w-3.5 h-3.5" aria-hidden="true"></i> Export CSV
           </button>
 
           <button type="button" id="btn-more" title="More tools" aria-label="More tools"
-                  aria-haspopup="true" aria-expanded="false" aria-controls="more-menu"
-                  class="tool-btn hidden px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 items-center gap-1.5">
+                  aria-haspopup="true" aria-expanded="false" aria-controls="more-menu" class="tool-btn hidden">
             <i data-lucide="more-horizontal" class="w-3.5 h-3.5" aria-hidden="true"></i> More
           </button>
 
-          <span id="toolbar-divider" class="w-px h-5 bg-slate-600 mx-0.5" aria-hidden="true"></span>
+          <span id="toolbar-divider" class="toolbar-divider" aria-hidden="true"></span>
 
-          <button type="button" id="btn-undo" title="Undo (Ctrl+Z)" aria-label="Undo"
-                  class="tool-btn px-2 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700">
+          <button type="button" id="btn-undo" title="Undo (Ctrl+Z)" aria-label="Undo" class="tool-btn tool-btn-icon">
             <i data-lucide="undo-2" class="w-3.5 h-3.5" aria-hidden="true"></i>
           </button>
-          <button type="button" id="btn-redo" title="Redo (Ctrl+Y)" aria-label="Redo"
-                  class="tool-btn px-2 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700">
+          <button type="button" id="btn-redo" title="Redo (Ctrl+Y)" aria-label="Redo" class="tool-btn tool-btn-icon">
             <i data-lucide="redo-2" class="w-3.5 h-3.5" aria-hidden="true"></i>
           </button>
+          <button type="button" id="btn-theme" title="Switch theme" aria-label="Switch theme" class="tool-btn tool-btn-icon">
+            <i data-lucide="sun" class="w-3.5 h-3.5" aria-hidden="true"></i>
+          </button>
           <div class="relative">
-            <i data-lucide="search" class="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" aria-hidden="true"></i>
-            <input id="node-search" type="search" placeholder="Find task…" aria-label="Find task"
-                   class="w-28 sm:w-36 pl-7 pr-2 py-1.5 text-xs rounded-md bg-slate-900 border border-slate-600 focus:border-sky-500 outline-none" />
+            <i data-lucide="search" class="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-faint pointer-events-none" aria-hidden="true"></i>
+            <input id="node-search" type="search" placeholder="Find task…" aria-label="Find task" class="search-input" />
           </div>
         </div>
       </div>
 
-      <div id="cpm-summary" class="mt-1.5 text-[11px] text-slate-400 flex flex-wrap gap-x-4 gap-y-0.5" aria-live="polite">
-        <span>Project Duration: <span id="sum-duration" class="text-slate-200 font-medium">—</span></span>
-        <span>Critical Tasks: <span id="sum-critical" class="text-[#ff4d4d] font-medium">—</span></span>
-        <span>Mode: <span id="sum-mode" class="text-sky-300 font-medium">Avg</span></span>
-        <span id="sum-mc" class="hidden">P50: <span id="sum-p50" class="text-slate-200 font-medium">—</span> · P80: <span id="sum-p80" class="text-amber-300 font-medium">—</span> · P95: <span id="sum-p95" class="text-[#ff4d4d] font-medium">—</span></span>
-        <span class="text-slate-500 hidden sm:inline">Ctrl+Z / Ctrl+Y undo · hover traces dependencies · / to search</span>
+      <div id="cpm-summary" aria-live="polite">
+        <span>Project Duration: <span id="sum-duration" class="value">—</span></span>
+        <span id="sum-finish" class="hidden">Finishes: <span id="sum-finish-date" class="value">—</span></span>
+        <span>Critical Tasks: <span id="sum-critical" class="text-critical font-medium">—</span></span>
+        <span id="sum-at-risk" class="hidden">At risk: <span id="sum-at-risk-ids" class="text-warning font-medium">—</span></span>
+        <span>Mode: <span id="sum-mode" class="text-info font-medium">Avg</span></span>
+        <span id="sum-mc" class="hidden">P50: <span id="sum-p50" class="value">—</span> · P80: <span id="sum-p80" class="text-warning font-medium">—</span> · P95: <span id="sum-p95" class="text-critical font-medium">—</span></span>
+        <span class="text-faint hidden lg:inline">Ctrl+Z undo · hover traces dependencies · / search · 1–4 set status</span>
       </div>
 
-      <p id="boot-error" class="hidden mt-2 px-3 py-2 rounded-md border border-red-700 bg-red-950 text-red-200 text-xs" role="alert"></p>
+      <p id="boot-error" class="hidden banner banner-error" role="alert"></p>
     </header>
 
     <!-- Canvas / panel split -->
     <div id="work-area" class="flex-1 min-h-0 flex flex-col">
       <div id="canvas-pane">
-        <div id="network-canvas"></div>
-        <div id="connect-hint" class="hidden absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-blue-600/90 text-xs font-medium shadow-lg z-10">
+        <div id="network-canvas" tabindex="0" role="application" aria-label="Task network diagram"></div>
+
+        <div id="canvas-empty" class="hidden">
+          <i data-lucide="git-branch" class="w-8 h-8" aria-hidden="true"></i>
+          <p class="font-medium">No tasks on this page yet</p>
+          <p class="text-xs">Add a task, then use <strong>Connect</strong> to link predecessors to successors.</p>
+          <button type="button" id="btn-canvas-add" class="btn-primary mt-1">
+            <i data-lucide="plus" class="w-3.5 h-3.5" aria-hidden="true"></i> Add the first task
+          </button>
+          <p class="text-[10px] text-faint">Tip: double-click empty space to add a task anywhere.</p>
+        </div>
+
+        <div id="connect-hint" class="hidden">
           Connect: select the predecessor, then the successor (Esc to cancel)
         </div>
+
+        <div id="canvas-controls">
+          <button type="button" id="btn-zoom-in" class="canvas-btn" aria-label="Zoom in" title="Zoom in (+)">
+            <i data-lucide="plus" class="w-4 h-4" aria-hidden="true"></i>
+          </button>
+          <button type="button" id="btn-zoom-out" class="canvas-btn" aria-label="Zoom out" title="Zoom out (−)">
+            <i data-lucide="minus" class="w-4 h-4" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        <div id="legend">
+          <button type="button" id="legend-toggle" aria-expanded="true" aria-controls="legend-body">
+            <i data-lucide="palette" class="w-3.5 h-3.5" aria-hidden="true"></i> Legend
+          </button>
+          <div id="legend-body"></div>
+        </div>
+
+        <canvas id="minimap" width="168" height="108" aria-hidden="true" title="Diagram overview"></canvas>
       </div>
 
       <div id="splitter" role="separator" aria-orientation="horizontal" tabindex="0"
@@ -135,28 +159,34 @@
            aria-valuemin="20" aria-valuemax="80" aria-valuenow="50"
            title="Drag to resize · double-click to reset"></div>
 
-      <div id="bottom-panel" class="overflow-y-auto bg-slate-900 p-4 flex flex-col">
-        <p id="cycle-warning" class="hidden mb-3 shrink-0 px-3 py-2 rounded-md border border-amber-700 bg-amber-950 text-amber-200 text-xs" role="alert"></p>
+      <div id="bottom-panel">
+        <p id="cycle-warning" class="hidden banner banner-warning shrink-0 mb-3" role="alert"></p>
 
-        <div id="bottom-toolbar" class="flex items-center justify-between mb-3 shrink-0">
-          <h2 class="text-sm font-semibold text-slate-200 flex items-center gap-2">
-            <i data-lucide="layers" class="w-4 h-4 text-slate-400" aria-hidden="true"></i>
+        <div id="baseline-banner" class="hidden banner banner-info shrink-0 mb-3">
+          <span data-baseline-text></span>
+          <button type="button" id="btn-clear-baseline" class="link-btn">Clear baseline</button>
+        </div>
+
+        <div id="bottom-toolbar">
+          <h2 class="text-sm font-semibold flex items-center gap-2">
+            <i data-lucide="layers" class="w-4 h-4 text-muted" aria-hidden="true"></i>
             Milestones &amp; Tasks
-            <span id="view-label" class="text-slate-500 font-normal">(Main Diagram)</span>
+            <span id="view-label" class="text-muted font-normal">(Main Diagram)</span>
           </h2>
-          <button type="button" id="btn-add-milestone" class="px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-800 hover:bg-slate-700 flex items-center gap-1.5">
+          <button type="button" id="btn-add-milestone" class="tool-btn">
             <i data-lucide="folder-plus" class="w-3.5 h-3.5" aria-hidden="true"></i> Add Milestone
           </button>
         </div>
 
-        <div id="gantt-panel" class="mb-4 shrink-0 border border-slate-700 rounded-xl bg-slate-800/50 p-3">
+        <div id="gantt-panel" class="mb-4 shrink-0 card p-3">
           <div class="flex items-center justify-between mb-2">
-            <h3 class="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+            <h3 class="text-xs font-semibold flex items-center gap-1.5">
               <i data-lucide="gantt-chart" class="w-3.5 h-3.5" aria-hidden="true"></i> Mini-Gantt Timeline
             </h3>
-            <span id="gantt-scale" class="text-[10px] text-slate-500"></span>
+            <span id="gantt-scale" class="text-[10px] text-muted"></span>
           </div>
-          <div id="gantt-body" class="max-h-40 overflow-y-auto pr-1"></div>
+          <div id="gantt-axis-wrap"><div id="gantt-axis"></div></div>
+          <div id="gantt-body"></div>
         </div>
 
         <div id="milestones-container" class="space-y-4 flex-1 min-h-0"></div>
@@ -164,71 +194,73 @@
     </div>
   </div>
 
-  <div id="toasts" class="fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none" role="status" aria-live="polite"></div>
+  <div id="toasts" role="status" aria-live="polite"></div>
 
   <!-- Overflow menu for the compact toolbar -->
-  <div id="more-menu" class="hidden fixed z-[200] w-56 rounded-lg border border-slate-600 bg-slate-800 shadow-2xl p-2">
+  <div id="more-menu" class="hidden popover w-56">
     <div id="more-slot" class="flex flex-col gap-1"></div>
   </div>
 
   <!-- Display options -->
-  <div id="display-menu" class="hidden fixed z-[200] w-52 rounded-lg border border-slate-600 bg-slate-800 shadow-2xl p-2 space-y-0.5" role="group" aria-label="Task display options">
-    <div class="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">Show on tasks</div>
-    <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="id" class="accent-[#ff4d4d]" checked disabled /> Task ID</label>
-    <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="title" class="accent-[#ff4d4d]" /> Title</label>
-    <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="minMax" class="accent-[#ff4d4d]" checked /> Min / Max</label>
-    <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="esEf" class="accent-[#ff4d4d]" checked /> ES / EF</label>
-    <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="lsLf" class="accent-[#ff4d4d]" checked /> LS / LF</label>
-    <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="slack" class="accent-[#ff4d4d]" checked /> Slack</label>
-    <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="link" class="accent-[#ff4d4d]" checked /> Link marker</label>
-    <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="progress" class="accent-[#ff4d4d]" checked /> Progress %</label>
+  <div id="display-menu" class="hidden popover w-56 space-y-0.5" role="group" aria-label="Task display options">
+    <div class="popover-heading">Show on tasks</div>
+    <label class="check-row"><input type="checkbox" data-display="id" checked disabled /> Task ID</label>
+    <label class="check-row"><input type="checkbox" data-display="title" /> Title</label>
+    <label class="check-row"><input type="checkbox" data-display="minMax" checked /> Min / Max</label>
+    <label class="check-row"><input type="checkbox" data-display="dates" /> Calendar dates</label>
+    <label class="check-row"><input type="checkbox" data-display="esEf" checked /> ES / EF</label>
+    <label class="check-row"><input type="checkbox" data-display="lsLf" checked /> LS / LF</label>
+    <label class="check-row"><input type="checkbox" data-display="slack" checked /> Slack</label>
+    <label class="check-row"><input type="checkbox" data-display="criticality" /> Criticality %</label>
+    <label class="check-row"><input type="checkbox" data-display="link" checked /> Link marker</label>
+    <label class="check-row"><input type="checkbox" data-display="progress" checked /> Progress %</label>
   </div>
 
   <!-- Task -->
-  <div id="modal-node" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop p-4" role="dialog" aria-modal="true" aria-labelledby="modal-node-heading">
-    <div class="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-      <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700">
-        <h3 id="modal-node-heading" class="text-sm font-semibold">Edit Task</h3>
-        <button type="button" id="modal-node-close" class="p-1 rounded hover:bg-slate-700 text-slate-400" aria-label="Close"><i data-lucide="x" class="w-4 h-4" aria-hidden="true"></i></button>
+  <div id="modal-node" class="hidden modal" role="dialog" aria-modal="true" aria-labelledby="modal-node-heading">
+    <div class="modal-card max-w-2xl">
+      <div class="modal-head">
+        <h3 id="modal-node-heading">Edit Task</h3>
+        <button type="button" id="modal-node-close" class="icon-btn" aria-label="Close"><i data-lucide="x" class="w-4 h-4" aria-hidden="true"></i></button>
       </div>
       <form id="form-node" class="p-4 space-y-3">
         <input type="hidden" id="edit-node-id" />
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label for="edit-id" class="block text-xs text-slate-400 mb-1">Task ID</label>
-            <input id="edit-id" type="text" required data-autofocus class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none" />
+            <label for="edit-id">Task ID</label>
+            <input id="edit-id" type="text" required data-autofocus />
           </div>
           <div>
-            <label for="edit-milestone" class="block text-xs text-slate-400 mb-1">Milestone</label>
-            <select id="edit-milestone" class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none"></select>
+            <label for="edit-milestone">Milestone</label>
+            <select id="edit-milestone"></select>
           </div>
         </div>
         <div>
-          <label for="edit-title" class="block text-xs text-slate-400 mb-1">Title</label>
-          <input id="edit-title" type="text" required class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none" />
+          <label for="edit-title">Title</label>
+          <input id="edit-title" type="text" required />
         </div>
         <div>
-          <label for="edit-description" class="block text-xs text-slate-400 mb-1">Description</label>
-          <textarea id="edit-description" rows="2" class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none resize-none"></textarea>
+          <label for="edit-description">Description</label>
+          <textarea id="edit-description" rows="2"></textarea>
         </div>
         <div class="grid grid-cols-3 gap-3">
           <div>
-            <label for="edit-min" class="block text-xs text-slate-400 mb-1">Optimistic (O)</label>
-            <input id="edit-min" type="number" min="0" step="0.5" required class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none" />
+            <label for="edit-min">Optimistic (O)</label>
+            <input id="edit-min" type="number" min="0" step="0.5" required />
           </div>
           <div>
-            <label for="edit-likely" class="block text-xs text-slate-400 mb-1">Most Likely (M)</label>
-            <input id="edit-likely" type="number" min="0" step="0.5" class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none" />
+            <label for="edit-likely">Most Likely (M)</label>
+            <input id="edit-likely" type="number" min="0" step="0.5" />
           </div>
           <div>
-            <label for="edit-max" class="block text-xs text-slate-400 mb-1">Pessimistic (P)</label>
-            <input id="edit-max" type="number" min="0" step="0.5" required class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none" />
+            <label for="edit-max">Pessimistic (P)</label>
+            <input id="edit-max" type="number" min="0" step="0.5" required />
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label for="edit-status" class="block text-xs text-slate-400 mb-1">Status</label>
-            <select id="edit-status" class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none">
+            <label for="edit-status">Status</label>
+            <select id="edit-status">
               <option value="not_started">Not started</option>
               <option value="in_progress">In progress</option>
               <option value="blocked">Blocked</option>
@@ -236,24 +268,66 @@
             </select>
           </div>
           <div>
-            <label for="edit-progress" class="block text-xs text-slate-400 mb-1">Progress (%)</label>
-            <input id="edit-progress" type="number" min="0" max="100" step="1" class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none" />
+            <label for="edit-progress">Progress (%)</label>
+            <input id="edit-progress" type="number" min="0" max="100" step="1" />
           </div>
         </div>
+
+        <fieldset class="fieldset">
+          <legend>Predecessors</legend>
+          <div id="edit-deps" class="space-y-1.5"></div>
+          <button type="button" id="btn-add-dep" class="tool-btn mt-2">
+            <i data-lucide="plus" class="w-3.5 h-3.5" aria-hidden="true"></i> Add predecessor
+          </button>
+          <p class="hint">Lag delays the successor; a negative lag overlaps them.</p>
+        </fieldset>
+
         <div>
-          <label id="edit-linked-label" for="edit-linked" class="block text-xs text-slate-400 mb-1">Linked Sub-Page</label>
-          <select id="edit-linked" class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none">
-            <option value="">None</option>
-          </select>
-          <p id="edit-linked-hint" class="mt-1 text-[10px] text-slate-500">On the Main Diagram, link a task to a Sub-Path page.</p>
+          <label id="edit-linked-label" for="edit-linked">Linked Sub-Page</label>
+          <select id="edit-linked"><option value="">None</option></select>
+          <p id="edit-linked-hint" class="hint">On the Main Diagram, link a task to a Sub-Path page.</p>
         </div>
+
         <div class="flex justify-between pt-2">
-          <button type="button" id="btn-delete-node" class="px-3 py-2 text-xs rounded-md border border-red-800 text-red-400 hover:bg-red-950 flex items-center gap-1.5">
+          <button type="button" id="btn-delete-node" class="btn-danger">
             <i data-lucide="trash-2" class="w-3.5 h-3.5" aria-hidden="true"></i> Delete
           </button>
           <div class="flex gap-2">
-            <button type="button" id="modal-node-cancel" class="px-3 py-2 text-xs rounded-md border border-slate-600 hover:bg-slate-700">Cancel</button>
-            <button type="submit" class="px-3 py-2 text-xs rounded-md bg-[#ff4d4d] hover:bg-red-500 text-white font-medium">Save</button>
+            <button type="button" id="modal-node-cancel" class="btn-secondary">Cancel</button>
+            <button type="submit" class="btn-primary">Save</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Dependency -->
+  <div id="modal-edge" class="hidden modal" role="dialog" aria-modal="true" aria-labelledby="modal-edge-heading">
+    <div class="modal-card max-w-sm">
+      <div class="modal-head">
+        <h3 id="modal-edge-heading">Edit Dependency</h3>
+        <button type="button" id="modal-edge-close" class="icon-btn" aria-label="Close"><i data-lucide="x" class="w-4 h-4" aria-hidden="true"></i></button>
+      </div>
+      <form id="form-edge" class="p-4 space-y-3">
+        <input type="hidden" id="edge-from" />
+        <input type="hidden" id="edge-to" />
+        <p class="text-sm font-mono" id="edge-summary">—</p>
+        <div>
+          <label for="edge-type">Relation</label>
+          <select id="edge-type" data-autofocus></select>
+        </div>
+        <div>
+          <label for="edge-lag">Lag (days)</label>
+          <input id="edge-lag" type="number" step="0.5" />
+          <p class="hint">Positive delays the successor; negative overlaps them.</p>
+        </div>
+        <div class="flex justify-between pt-1">
+          <button type="button" id="btn-delete-edge" class="btn-danger">
+            <i data-lucide="trash-2" class="w-3.5 h-3.5" aria-hidden="true"></i> Remove
+          </button>
+          <div class="flex gap-2">
+            <button type="button" id="modal-edge-cancel" class="btn-secondary">Cancel</button>
+            <button type="submit" class="btn-primary">Save</button>
           </div>
         </div>
       </form>
@@ -261,78 +335,143 @@
   </div>
 
   <!-- Milestone -->
-  <div id="modal-milestone" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop p-4" role="dialog" aria-modal="true" aria-labelledby="modal-milestone-title">
-    <div class="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl w-full max-w-sm">
-      <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700">
-        <h3 id="modal-milestone-title" class="text-sm font-semibold">Add Milestone</h3>
-        <button type="button" id="modal-milestone-close" class="p-1 rounded hover:bg-slate-700 text-slate-400" aria-label="Close"><i data-lucide="x" class="w-4 h-4" aria-hidden="true"></i></button>
+  <div id="modal-milestone" class="hidden modal" role="dialog" aria-modal="true" aria-labelledby="modal-milestone-title">
+    <div class="modal-card max-w-sm">
+      <div class="modal-head">
+        <h3 id="modal-milestone-title">Add Milestone</h3>
+        <button type="button" id="modal-milestone-close" class="icon-btn" aria-label="Close"><i data-lucide="x" class="w-4 h-4" aria-hidden="true"></i></button>
       </div>
       <form id="form-milestone" class="p-4 space-y-3">
         <input type="hidden" id="edit-ms-id" />
         <div>
-          <label for="edit-ms-title" class="block text-xs text-slate-400 mb-1">Milestone title</label>
-          <input id="edit-ms-title" type="text" required data-autofocus placeholder="e.g. Phase 2: Execution" class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none" />
+          <label for="edit-ms-title">Milestone title</label>
+          <input id="edit-ms-title" type="text" required data-autofocus placeholder="e.g. Phase 2: Execution" />
         </div>
         <div class="flex justify-end gap-2 pt-1">
-          <button type="button" id="modal-milestone-cancel" class="px-3 py-2 text-xs rounded-md border border-slate-600 hover:bg-slate-700">Cancel</button>
-          <button type="submit" class="px-3 py-2 text-xs rounded-md bg-[#ff4d4d] hover:bg-red-500 text-white font-medium">Save</button>
+          <button type="button" id="modal-milestone-cancel" class="btn-secondary">Cancel</button>
+          <button type="submit" class="btn-primary">Save</button>
         </div>
       </form>
     </div>
   </div>
 
   <!-- Sub-path -->
-  <div id="modal-subpath" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop p-4" role="dialog" aria-modal="true" aria-labelledby="modal-subpath-title">
-    <div class="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl w-full max-w-sm">
-      <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700">
-        <h3 id="modal-subpath-title" class="text-sm font-semibold">Add Sub-Path</h3>
-        <button type="button" id="modal-subpath-close" class="p-1 rounded hover:bg-slate-700 text-slate-400" aria-label="Close"><i data-lucide="x" class="w-4 h-4" aria-hidden="true"></i></button>
+  <div id="modal-subpath" class="hidden modal" role="dialog" aria-modal="true" aria-labelledby="modal-subpath-title">
+    <div class="modal-card max-w-sm">
+      <div class="modal-head">
+        <h3 id="modal-subpath-title">Add Sub-Path</h3>
+        <button type="button" id="modal-subpath-close" class="icon-btn" aria-label="Close"><i data-lucide="x" class="w-4 h-4" aria-hidden="true"></i></button>
       </div>
       <form id="form-subpath" class="p-4 space-y-3">
         <input type="hidden" id="edit-sp-id" />
         <div>
-          <label for="edit-sp-title" class="block text-xs text-slate-400 mb-1">Sub-path name</label>
-          <input id="edit-sp-title" type="text" required data-autofocus placeholder="e.g. Sub-Path 4" class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none" />
+          <label for="edit-sp-title">Sub-path name</label>
+          <input id="edit-sp-title" type="text" required data-autofocus placeholder="e.g. Sub-Path 4" />
         </div>
         <div class="flex justify-between pt-1">
-          <button type="button" id="btn-delete-subpath" class="hidden px-3 py-2 text-xs rounded-md border border-red-800 text-red-400 hover:bg-red-950 items-center gap-1.5">
+          <button type="button" id="btn-delete-subpath" class="hidden btn-danger">
             <i data-lucide="trash-2" class="w-3.5 h-3.5" aria-hidden="true"></i> Delete
           </button>
           <div class="flex gap-2 ml-auto">
-            <button type="button" id="modal-subpath-cancel" class="px-3 py-2 text-xs rounded-md border border-slate-600 hover:bg-slate-700">Cancel</button>
-            <button type="submit" class="px-3 py-2 text-xs rounded-md bg-[#ff4d4d] hover:bg-red-500 text-white font-medium">Save</button>
+            <button type="button" id="modal-subpath-cancel" class="btn-secondary">Cancel</button>
+            <button type="submit" class="btn-primary">Save</button>
           </div>
         </div>
       </form>
     </div>
   </div>
 
+  <!-- Project settings -->
+  <div id="modal-settings" class="hidden modal" role="dialog" aria-modal="true" aria-labelledby="modal-settings-heading">
+    <div class="modal-card max-w-lg">
+      <div class="modal-head">
+        <h3 id="modal-settings-heading">Project Settings</h3>
+        <button type="button" id="modal-settings-close" class="icon-btn" aria-label="Close"><i data-lucide="x" class="w-4 h-4" aria-hidden="true"></i></button>
+      </div>
+      <form id="form-settings" class="p-4 space-y-4">
+        <fieldset class="fieldset">
+          <legend>Calendar</legend>
+          <label class="check-row mb-2">
+            <input type="checkbox" id="set-calendar-enabled" data-autofocus />
+            Show real dates instead of day numbers
+          </label>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label for="set-start-date">Project start</label>
+              <input id="set-start-date" type="date" />
+            </div>
+            <div>
+              <label for="set-near-critical">At-risk slack (days)</label>
+              <input id="set-near-critical" type="number" min="0" step="0.5" />
+            </div>
+          </div>
+          <div class="mt-3">
+            <span class="field-label">Working days</span>
+            <div id="set-workdays" class="workday-row"></div>
+          </div>
+          <div class="mt-3">
+            <label for="set-holidays">Holidays</label>
+            <textarea id="set-holidays" rows="3" placeholder="2026-12-25&#10;2026-12-26"></textarea>
+            <p class="hint">One ISO date per line. These are skipped when scheduling.</p>
+          </div>
+        </fieldset>
+
+        <fieldset class="fieldset">
+          <legend>Appearance</legend>
+          <label for="set-node-shape">Task shape</label>
+          <select id="set-node-shape">
+            <option value="circle">Circle (default)</option>
+            <option value="box">Box — activity-on-node notation</option>
+          </select>
+          <p class="hint">The box shape lays ES, duration, EF, LS, slack and LF out in a fixed grid.</p>
+        </fieldset>
+
+        <div class="flex justify-end gap-2">
+          <button type="button" id="modal-settings-cancel" class="btn-secondary">Cancel</button>
+          <button type="submit" class="btn-primary">Save settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Monte Carlo -->
-  <div id="modal-monte" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop p-4" role="dialog" aria-modal="true" aria-labelledby="modal-monte-heading">
-    <div class="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl w-full max-w-lg">
-      <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700">
-        <h3 id="modal-monte-heading" class="text-sm font-semibold">Monte Carlo Risk Simulation</h3>
-        <button type="button" id="modal-monte-close" class="p-1 rounded hover:bg-slate-700 text-slate-400" aria-label="Close"><i data-lucide="x" class="w-4 h-4" aria-hidden="true"></i></button>
+  <div id="modal-monte" class="hidden modal" role="dialog" aria-modal="true" aria-labelledby="modal-monte-heading">
+    <div class="modal-card max-w-2xl">
+      <div class="modal-head">
+        <h3 id="modal-monte-heading">Monte Carlo Risk Simulation</h3>
+        <button type="button" id="modal-monte-close" class="icon-btn" aria-label="Close"><i data-lucide="x" class="w-4 h-4" aria-hidden="true"></i></button>
       </div>
       <div class="p-4 space-y-3">
-        <p class="text-xs text-slate-400">Samples each task from a triangular (O / M / P) distribution and recomputes the project duration.</p>
+        <p class="text-xs text-muted">Samples each task from a triangular (O / M / P) distribution and recomputes the project duration.</p>
         <div class="flex items-center gap-3">
-          <label for="mc-runs" class="text-xs text-slate-400">Runs</label>
-          <input id="mc-runs" type="number" min="100" max="20000" step="100" value="2000" data-autofocus class="w-28 px-2 py-1.5 text-sm rounded-md bg-slate-900 border border-slate-600 outline-none" />
-          <button type="button" id="btn-run-monte" class="px-3 py-1.5 text-xs rounded-md bg-[#ff4d4d] hover:bg-red-500 disabled:opacity-50 text-white font-medium">Run</button>
+          <label for="mc-runs" class="mb-0">Runs</label>
+          <input id="mc-runs" type="number" min="100" max="20000" step="100" value="2000" data-autofocus class="w-28" />
+          <button type="button" id="btn-run-monte" class="btn-primary">Run</button>
         </div>
-        <div id="mc-progress" class="hidden h-1.5 rounded bg-slate-900 border border-slate-700 overflow-hidden"
+        <div id="mc-progress" class="hidden progress-track"
              role="progressbar" aria-label="Simulation progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-          <div id="mc-progress-bar" class="h-full bg-sky-500" style="width:0%"></div>
+          <div id="mc-progress-bar" class="progress-bar" style="width:0%"></div>
         </div>
-        <div id="mc-results" class="hidden space-y-2">
+        <div id="mc-results" class="hidden space-y-3">
           <div class="grid grid-cols-4 gap-2 text-center text-xs">
-            <div class="bg-slate-900 rounded-lg border border-slate-700 p-2"><div class="text-slate-500">Mean</div><div id="mc-mean" class="text-slate-100 font-semibold">—</div></div>
-            <div class="bg-slate-900 rounded-lg border border-slate-700 p-2"><div class="text-slate-500">P50</div><div id="mc-p50" class="text-slate-100 font-semibold">—</div></div>
-            <div class="bg-slate-900 rounded-lg border border-slate-700 p-2"><div class="text-slate-500">P80</div><div id="mc-p80" class="text-amber-300 font-semibold">—</div></div>
-            <div class="bg-slate-900 rounded-lg border border-slate-700 p-2"><div class="text-slate-500">P95</div><div id="mc-p95" class="text-[#ff4d4d] font-semibold">—</div></div>
+            <div class="stat-box"><div class="text-muted">Mean</div><div id="mc-mean" class="font-semibold">—</div></div>
+            <div class="stat-box"><div class="text-muted">P50</div><div id="mc-p50" class="font-semibold">—</div></div>
+            <div class="stat-box"><div class="text-muted">P80</div><div id="mc-p80" class="font-semibold text-warning">—</div></div>
+            <div class="stat-box"><div class="text-muted">P95</div><div id="mc-p95" class="font-semibold text-critical">—</div></div>
           </div>
-          <div id="mc-hist" class="h-28 flex items-end gap-0.5 px-1 border border-slate-700 rounded-lg bg-slate-900/80"></div>
+          <div id="mc-hist"></div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <h4 class="chart-heading">Criticality index</h4>
+              <p class="hint mb-1">How often each task was on the critical path.</p>
+              <div id="mc-criticality" class="bar-chart"></div>
+            </div>
+            <div>
+              <h4 class="chart-heading">Sensitivity</h4>
+              <p class="hint mb-1">Which estimates drive the project duration.</p>
+              <div id="mc-tornado" class="bar-chart"></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

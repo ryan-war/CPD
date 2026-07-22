@@ -1,0 +1,423 @@
+// Scheduling engine tests. Run with: node --test
+//
+// These lock in the numbers the rest of the application is derived from. A
+// regression here would be quietly wrong rather than visibly broken, which is
+// exactly the kind that survives a manual pass through the interface.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  computeCPM, compileGraph, createRollup, nodesOf, baseDuration,
+  wouldCreateCycle, traceFrom, toDependency, predecessorIds,
+  indexGraph, scheduleSample
+} from '../js/cpm.js';
+import { createDefaultState, normalizeState, captureBaseline } from '../js/state.js';
+import { createCalendar, toISODate, parseISODate } from '../js/calendar.js';
+import { sampleTriangular, percentile, histogram } from '../js/simulate.js';
+
+const task = (id, min, max, dependencies = [], extra = {}) =>
+  ({ id, title: id, min, max, dependencies, ...extra });
+
+function schedule(nodes, options = {}) {
+  return computeCPM(nodes, { mode: 'average', ...options });
+}
+
+// ─── Baseline: the shipped default project ─────────────────
+// Captured from the original implementation before the rewrite. If these
+// change, the engine's behaviour has changed.
+
+test('default project matches the captured baseline', () => {
+  const state = normalizeState(createDefaultState());
+  const nodes = nodesOf(state.diagrams.main);
+
+  for (const mode of ['average', 'pert']) {
+    const rollup = createRollup(state.diagrams, mode);
+    const result = computeCPM(nodes, { mode, rollup });
+
+    assert.equal(result.projectDuration, 14.5, `${mode} project duration`);
+    assert.deepEqual([...result.criticalIds].sort(), ['A', 'B', 'C', 'E']);
+    assert.deepEqual(result.cycleIds, []);
+
+    const expected = {
+      A: { duration: 3, ES: 0, EF: 3, LS: 0, LF: 3, slack: 0 },
+      B: { duration: 4, ES: 3, EF: 7, LS: 3, LF: 7, slack: 0 },
+      C: { duration: 5, ES: 7, EF: 12, LS: 7, LF: 12, slack: 0 },
+      D: { duration: 4, ES: 7, EF: 11, LS: 8, LF: 12, slack: 1 },
+      E: { duration: 2.5, ES: 12, EF: 14.5, LS: 12, LF: 14.5, slack: 0 }
+    };
+    for (const [id, want] of Object.entries(expected)) {
+      const got = result.metrics[id];
+      for (const key of Object.keys(want)) {
+        assert.equal(got[key], want[key], `${mode} ${id}.${key}`);
+      }
+    }
+  }
+});
+
+test('estimation modes use the documented formulas', () => {
+  const n = { min: 2, likely: 3, max: 10 };
+  assert.equal(baseDuration(n, 'average'), 6);              // (2 + 10) / 2
+  assert.equal(baseDuration(n, 'pert'), (2 + 12 + 10) / 6); // (O + 4M + P) / 6
+  // A missing most-likely falls back to the midpoint, making PERT equal average.
+  assert.equal(baseDuration({ min: 2, max: 10 }, 'pert'), 6);
+});
+
+// ─── Precedence relations ──────────────────────────────────
+
+test('finish-to-start is the default relation', () => {
+  const r = schedule([task('A', 4, 4), task('B', 2, 2, ['A'])]);
+  assert.equal(r.metrics.B.ES, 4);
+  assert.equal(r.projectDuration, 6);
+});
+
+test('start-to-start lets the successor overlap', () => {
+  const r = schedule([
+    task('A', 10, 10),
+    task('B', 4, 4, [{ id: 'A', type: 'SS', lag: 2 }])
+  ]);
+  assert.equal(r.metrics.B.ES, 2, 'starts 2 days after A starts');
+  assert.equal(r.projectDuration, 10, 'B finishes inside A');
+});
+
+test('finish-to-finish aligns the finishes', () => {
+  const r = schedule([
+    task('A', 10, 10),
+    task('B', 4, 4, [{ id: 'A', type: 'FF', lag: 0 }])
+  ]);
+  assert.equal(r.metrics.B.EF, 10);
+  assert.equal(r.metrics.B.ES, 6, 'derived by subtracting its own duration');
+});
+
+test('start-to-finish constrains the successor finish', () => {
+  const r = schedule([
+    task('A', 10, 10),
+    task('B', 3, 3, [{ id: 'A', type: 'SF', lag: 5 }])
+  ]);
+  assert.equal(r.metrics.B.EF, 5);
+  assert.equal(r.metrics.B.ES, 2);
+});
+
+test('positive lag delays and negative lag overlaps', () => {
+  const delayed = schedule([task('A', 4, 4), task('B', 2, 2, [{ id: 'A', type: 'FS', lag: 3 }])]);
+  assert.equal(delayed.metrics.B.ES, 7);
+  assert.equal(delayed.projectDuration, 9);
+
+  const lead = schedule([task('A', 4, 4), task('B', 2, 2, [{ id: 'A', type: 'FS', lag: -2 }])]);
+  assert.equal(lead.metrics.B.ES, 2, 'a lead pulls the successor earlier');
+  assert.equal(lead.projectDuration, 4);
+});
+
+test('a lead cannot pull the schedule before day zero', () => {
+  const r = schedule([task('A', 2, 2), task('B', 2, 2, [{ id: 'A', type: 'SS', lag: -50 }])]);
+  assert.equal(r.metrics.B.ES, 0);
+});
+
+test('backward pass respects the relation type', () => {
+  // B is tied to A's finish, so A has no freedom despite the parallel path.
+  const r = schedule([
+    task('A', 5, 5),
+    task('B', 5, 5, [{ id: 'A', type: 'FF', lag: 0 }]),
+    task('C', 2, 2, [{ id: 'B', type: 'FS', lag: 0 }])
+  ]);
+  assert.equal(r.projectDuration, 7);
+  assert.equal(r.metrics.A.slack, 0);
+  assert.equal(r.metrics.B.slack, 0);
+});
+
+test('slack identifies the non-critical path', () => {
+  const r = schedule([
+    task('A', 2, 2),
+    task('B', 6, 6, ['A']),
+    task('C', 2, 2, ['A']),
+    task('D', 1, 1, ['B', 'C'])
+  ]);
+  assert.equal(r.projectDuration, 9);
+  assert.equal(r.metrics.C.slack, 4);
+  assert.deepEqual([...r.criticalIds].sort(), ['A', 'B', 'D']);
+});
+
+// ─── Legacy format migration ───────────────────────────────
+
+test('bare predecessor ids migrate to finish-to-start with no lag', () => {
+  assert.deepEqual(toDependency('A'), { id: 'A', type: 'FS', lag: 0 });
+  assert.deepEqual(toDependency({ id: 'B', type: 'SS', lag: 3 }), { id: 'B', type: 'SS', lag: 3 });
+  // Unknown relations degrade to the safe default rather than breaking maths.
+  assert.deepEqual(toDependency({ id: 'C', type: 'XX' }), { id: 'C', type: 'FS', lag: 0 });
+  assert.deepEqual(toDependency({ id: 'D', lag: 'abc' }), { id: 'D', type: 'FS', lag: 0 });
+});
+
+test('a legacy project file schedules identically after migration', () => {
+  const legacy = normalizeState({
+    diagrams: {
+      main: {
+        milestones: [{
+          id: 'm', title: 'M', nodes: [
+            { id: 'A', min: 2, max: 4, dependencies: [] },
+            { id: 'B', min: 3, max: 5, dependencies: ['A'] }
+          ]
+        }]
+      }
+    }
+  });
+  const deps = nodesOf(legacy.diagrams.main)[1].dependencies;
+  assert.deepEqual(deps, [{ id: 'A', type: 'FS', lag: 0 }]);
+  assert.equal(schedule(nodesOf(legacy.diagrams.main)).projectDuration, 7);
+});
+
+test('import repairs malformed projects', () => {
+  const repaired = normalizeState({
+    diagrams: {
+      main: {
+        milestones: [{
+          id: 'm', title: 'M', nodes: [
+            // duplicate id, inverted range, out-of-range likely and progress,
+            // self-dependency, and a dependency on a task that does not exist
+            { id: 'A', min: 5, max: 2, likely: 99, progress: 900, dependencies: ['A', 'ghost'] },
+            { id: 'A', min: 1, max: 2, dependencies: [] }
+          ]
+        }]
+      }
+    }
+  });
+  const nodes = nodesOf(repaired.diagrams.main);
+  assert.equal(nodes.length, 2);
+  assert.notEqual(nodes[0].id, nodes[1].id, 'duplicate ids are made unique');
+  assert.ok(nodes[0].max >= nodes[0].min, 'range is corrected');
+  assert.ok(nodes[0].likely >= nodes[0].min && nodes[0].likely <= nodes[0].max);
+  assert.equal(nodes[0].progress, 100, 'progress is clamped');
+  assert.deepEqual(nodes[0].dependencies, [], 'self and dangling links dropped');
+});
+
+test('normalize rejects a file with no main diagram', () => {
+  assert.throws(() => normalizeState({}), /diagrams\.main/);
+  assert.throws(() => normalizeState(null), /object/);
+});
+
+// ─── Cycles ────────────────────────────────────────────────
+
+test('cycles are reported by name rather than failing silently', () => {
+  const nodes = [
+    task('X', 1, 1, ['Z']), task('Y', 1, 1, ['X']),
+    task('Z', 1, 1, ['Y']), task('W', 1, 1)
+  ];
+  const graph = compileGraph(nodes);
+  assert.deepEqual(graph.cycleIds.sort(), ['X', 'Y', 'Z']);
+  assert.deepEqual(graph.order, ['W']);
+
+  const r = schedule(nodes);
+  assert.equal(r.projectDuration, 0);
+  assert.equal(r.criticalIds.size, 0);
+  assert.deepEqual(r.cycleIds.sort(), ['X', 'Y', 'Z']);
+});
+
+test('cycle detection catches indirect loops', () => {
+  const nodes = [task('A', 1, 1), task('B', 1, 1, ['A']), task('C', 1, 1, ['B'])];
+  assert.equal(wouldCreateCycle('C', 'A', nodes), true, 'C → A closes the loop');
+  assert.equal(wouldCreateCycle('A', 'C', nodes), false, 'A → C is already implied');
+});
+
+test('trace collects ancestors and descendants', () => {
+  const nodes = [
+    task('A', 1, 1), task('B', 1, 1, ['A']), task('C', 1, 1, ['B']),
+    task('X', 1, 1), task('Y', 1, 1, ['X'])
+  ];
+  assert.deepEqual([...traceFrom('B', nodes)].sort(), ['A', 'B', 'C']);
+  assert.deepEqual(predecessorIds(nodes[1]), ['A']);
+});
+
+// ─── Sub-path roll-up ──────────────────────────────────────
+
+test('sibling tasks linking the same sub-page both roll up', () => {
+  const state = normalizeState({
+    diagrams: {
+      main: {
+        milestones: [{
+          id: 'm', title: 'M', nodes: [
+            task('P', 1, 1, [], { linkedSubPage: 'sub_1' }),
+            task('Q', 1, 1, [], { linkedSubPage: 'sub_1' })
+          ]
+        }]
+      },
+      sub_1: {
+        milestones: [{
+          id: 's', title: 'S', nodes: [task('S1', 10, 10), task('S2', 10, 10, ['S1'])]
+        }]
+      }
+    }
+  });
+  const r = computeCPM(nodesOf(state.diagrams.main), {
+    mode: 'average',
+    rollup: createRollup(state.diagrams, 'average')
+  });
+  assert.equal(r.metrics.P.duration, 20);
+  assert.equal(r.metrics.Q.duration, 20, 'the second sibling must not lose the roll-up');
+});
+
+test('pages linking each other terminate instead of recursing', () => {
+  const state = normalizeState({
+    diagrams: {
+      main: { milestones: [{ id: 'm', title: 'm', nodes: [task('A', 1, 1, [], { linkedSubPage: 'sub_1' })] }] },
+      sub_1: { milestones: [{ id: 'm', title: 'm', nodes: [task('B', 2, 2, [], { linkedSubPage: 'sub_2' })] }] },
+      sub_2: { milestones: [{ id: 'm', title: 'm', nodes: [task('C', 3, 3, [], { linkedSubPage: 'sub_1' })] }] }
+    }
+  });
+  const r = computeCPM(nodesOf(state.diagrams.main), {
+    mode: 'average',
+    rollup: createRollup(state.diagrams, 'average')
+  });
+  assert.equal(r.projectDuration, 3);
+});
+
+test('an empty sub-page leaves the local estimate alone', () => {
+  const state = normalizeState({
+    diagrams: {
+      main: { milestones: [{ id: 'm', title: 'm', nodes: [task('A', 4, 4, [], { linkedSubPage: 'sub_1' })] }] },
+      sub_1: { milestones: [] }
+    }
+  });
+  const r = computeCPM(nodesOf(state.diagrams.main), {
+    mode: 'average',
+    rollup: createRollup(state.diagrams, 'average')
+  });
+  assert.equal(r.metrics.A.duration, 4);
+});
+
+// ─── Calendar ──────────────────────────────────────────────
+
+test('working days skip weekends', () => {
+  // 2026-04-13 is a Monday.
+  const cal = createCalendar({ startDate: '2026-04-13', workdays: [1, 2, 3, 4, 5] });
+  assert.equal(toISODate(cal.offsetToDate(0)), '2026-04-13', 'Mon');
+  assert.equal(toISODate(cal.offsetToDate(4)), '2026-04-17', 'Fri');
+  assert.equal(toISODate(cal.offsetToDate(5)), '2026-04-20', 'skips the weekend');
+  assert.equal(toISODate(cal.offsetToDate(9)), '2026-04-24');
+});
+
+test('holidays are skipped', () => {
+  const cal = createCalendar({
+    startDate: '2026-04-13',
+    workdays: [1, 2, 3, 4, 5],
+    holidays: ['2026-04-15']
+  });
+  assert.equal(toISODate(cal.offsetToDate(1)), '2026-04-14');
+  assert.equal(toISODate(cal.offsetToDate(2)), '2026-04-16', 'the 15th is a holiday');
+});
+
+test('a start on a non-working day rolls forward', () => {
+  // 2026-04-18 is a Saturday.
+  const cal = createCalendar({ startDate: '2026-04-18', workdays: [1, 2, 3, 4, 5] });
+  assert.equal(toISODate(cal.offsetToDate(0)), '2026-04-20', 'begins Monday');
+});
+
+test('a seven-day calendar skips nothing', () => {
+  const cal = createCalendar({ startDate: '2026-04-13', workdays: [0, 1, 2, 3, 4, 5, 6] });
+  assert.equal(toISODate(cal.offsetToDate(5)), '2026-04-18');
+});
+
+test('finish date is the last day the task occupies', () => {
+  const cal = createCalendar({ startDate: '2026-04-13', workdays: [1, 2, 3, 4, 5] });
+  // A 5-day task starting Monday finishes Friday, not the following Monday.
+  assert.equal(toISODate(cal.finishDate(0, 5)), '2026-04-17');
+  // A zero-length milestone reports its own day.
+  assert.equal(toISODate(cal.finishDate(0, 0)), '2026-04-13');
+});
+
+test('dates parse and format without timezone drift', () => {
+  const d = parseISODate('2026-01-01');
+  assert.equal(d.getFullYear(), 2026);
+  assert.equal(d.getMonth(), 0);
+  assert.equal(d.getDate(), 1);
+  assert.equal(toISODate(d), '2026-01-01');
+  assert.equal(parseISODate('nonsense'), null);
+});
+
+// ─── Simulation primitives ─────────────────────────────────
+
+test('triangular samples stay within bounds', () => {
+  for (let i = 0; i < 2000; i++) {
+    const v = sampleTriangular(2, 5, 9);
+    assert.ok(v >= 2 && v <= 9, `sample ${v} out of range`);
+  }
+});
+
+test('a most-likely outside the range does not produce NaN', () => {
+  for (let i = 0; i < 500; i++) {
+    assert.ok(Number.isFinite(sampleTriangular(2, 50, 9)), 'M above P');
+    assert.ok(Number.isFinite(sampleTriangular(2, -50, 9)), 'M below O');
+  }
+  assert.equal(sampleTriangular(5, 5, 5), 5, 'a degenerate range is its own value');
+});
+
+test('percentiles interpolate', () => {
+  const sorted = [1, 2, 3, 4, 5];
+  assert.equal(percentile(sorted, 0), 1);
+  assert.equal(percentile(sorted, 0.5), 3);
+  assert.equal(percentile(sorted, 1), 5);
+  assert.equal(percentile(sorted, 0.25), 2);
+  assert.equal(percentile([], 0.5), 0);
+});
+
+test('histogram bins every sample exactly once', () => {
+  const sorted = Array.from({ length: 500 }, (_, i) => i / 10);
+  const { counts } = histogram(sorted, 24);
+  assert.equal(counts.reduce((a, b) => a + b, 0), 500);
+  assert.equal(counts.length, 24);
+});
+
+// ─── Indexed fast path ─────────────────────────────────────
+//
+// The simulation runs a typed-array version of the scheduler for speed. It has
+// to agree with the readable one exactly, or the risk figures describe a
+// different project from the one on screen.
+
+test('the indexed scheduler agrees with computeCPM', () => {
+  const nodes = [
+    task('A', 2, 4),
+    task('B', 3, 5, ['A']),
+    task('C', 1, 3, [{ id: 'A', type: 'SS', lag: 1 }]),
+    task('D', 2, 2, [{ id: 'B', type: 'FF', lag: 0 }, { id: 'C', type: 'FS', lag: 2 }]),
+    task('E', 1, 1, [{ id: 'D', type: 'SF', lag: 4 }])
+  ];
+
+  const reference = schedule(nodes);
+  const graph = compileGraph(nodes);
+  const indexed = indexGraph(graph);
+
+  const durations = new Float64Array(indexed.n);
+  indexed.ids.forEach((id, i) => { durations[i] = reference.metrics[id].duration; });
+
+  const critical = new Uint8Array(indexed.n);
+  const total = scheduleSample(indexed, durations, critical);
+
+  assert.equal(total, reference.projectDuration, 'project duration');
+  indexed.ids.forEach((id, i) => {
+    assert.ok(Math.abs(indexed.buffers.es[i] - reference.metrics[id].ES) < 1e-9, `${id} ES`);
+    assert.ok(Math.abs(indexed.buffers.ef[i] - reference.metrics[id].EF) < 1e-9, `${id} EF`);
+    assert.ok(Math.abs(indexed.buffers.ls[i] - reference.metrics[id].LS) < 1e-9, `${id} LS`);
+    assert.ok(Math.abs(indexed.buffers.lf[i] - reference.metrics[id].LF) < 1e-9, `${id} LF`);
+    assert.equal(!!critical[i], reference.criticalIds.has(id), `${id} critical`);
+  });
+});
+
+test('the indexed scheduler reuses its buffers across runs', () => {
+  const nodes = [task('A', 1, 1), task('B', 2, 2, ['A'])];
+  const indexed = indexGraph(compileGraph(nodes));
+  const durations = new Float64Array([1, 2]);
+  const flags = new Uint8Array(indexed.n);
+
+  assert.equal(scheduleSample(indexed, durations, flags), 3);
+  durations[0] = 10;
+  assert.equal(scheduleSample(indexed, durations, flags), 12, 'no state carried over');
+});
+
+// ─── Baseline ──────────────────────────────────────────────
+
+test('baseline captures the schedule for later comparison', () => {
+  const nodes = [task('A', 2, 2), task('B', 3, 3, ['A'])];
+  const r = schedule(nodes);
+  const baseline = captureBaseline(r.metrics, r.projectDuration);
+  assert.equal(baseline.projectDuration, 5);
+  assert.equal(baseline.tasks.B.ES, 2);
+  assert.ok(baseline.capturedAt);
+});

@@ -15,12 +15,12 @@ export function linkTooltip(node) {
 
 export function linkBadgeHtml(node) {
   if (node.linkedSubPage) {
-    return `<button type="button" data-goto-page="${escapeHtml(node.linkedSubPage)}" class="goto-link text-[10px] px-1.5 py-0.5 rounded bg-blue-600/30 text-blue-300 border border-blue-700 hover:bg-blue-600/50 flex items-center gap-0.5"><i data-lucide="external-link" class="w-3 h-3" aria-hidden="true"></i>${escapeHtml(pageTitle(node.linkedSubPage))}</button>`;
+    return `<button type="button" data-goto-page="${escapeHtml(node.linkedSubPage)}" class="link-badge link-badge-sub"><i data-lucide="external-link" class="w-3 h-3" aria-hidden="true"></i>${escapeHtml(pageTitle(node.linkedSubPage))}</button>`;
   }
   if (node.linkedMainNode) {
     const main = findNodeInDiagram(node.linkedMainNode, 'main');
     const label = main ? `Main · ${node.linkedMainNode}` : `Main · ${node.linkedMainNode}?`;
-    return `<button type="button" data-goto-main="${escapeHtml(node.linkedMainNode)}" class="goto-main-link text-[10px] px-1.5 py-0.5 rounded bg-emerald-600/30 text-emerald-300 border border-emerald-700 hover:bg-emerald-600/50 flex items-center gap-0.5"><i data-lucide="corner-up-left" class="w-3 h-3" aria-hidden="true"></i>${escapeHtml(label)}</button>`;
+    return `<button type="button" data-goto-main="${escapeHtml(node.linkedMainNode)}" class="link-badge link-badge-main"><i data-lucide="corner-up-left" class="w-3 h-3" aria-hidden="true"></i>${escapeHtml(label)}</button>`;
   }
   return '';
 }

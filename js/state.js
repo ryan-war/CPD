@@ -1,7 +1,8 @@
 // Project state: shape, validation, accessors, and undo/redo history.
 
 import { DEFAULT_DISPLAY, HISTORY_MAX } from './config.js';
-import { nodesOf } from './cpm.js';
+import { nodesOf, toDependency, predecessorIds, DEPENDENCY_TYPES } from './cpm.js';
+import { DEFAULT_CALENDAR, toISODate, parseISODate } from './calendar.js';
 
 let state = createDefaultState();
 
@@ -19,6 +20,11 @@ export function createDefaultState() {
     activeView: 'main',
     layoutMode: 'free',
     estimationMode: 'average',
+    theme: 'dark',
+    nodeShape: 'circle',        // 'circle' | 'box' (activity-on-node notation)
+    nearCriticalDays: 1,        // slack at or below this is flagged as at-risk
+    calendar: { ...DEFAULT_CALENDAR },
+    baseline: null,             // snapshot for planned-vs-actual comparison
     nodeDisplay: { ...DEFAULT_DISPLAY },
     pageOrder: ['main', 'sub_1', 'sub_2', 'sub_3'],
     pageTitles: {
@@ -132,6 +138,11 @@ export function normalizeState(data) {
   data.nodeDisplay = { ...DEFAULT_DISPLAY, ...(data.nodeDisplay || {}) };
   if (!data.layoutMode) data.layoutMode = 'free';
   if (!data.estimationMode) data.estimationMode = 'average';
+  if (data.theme !== 'light') data.theme = 'dark';
+  if (data.nodeShape !== 'box') data.nodeShape = 'circle';
+  data.nearCriticalDays = Math.max(0, numberOr(data.nearCriticalDays, 1));
+  data.calendar = normalizeCalendar(data.calendar);
+  if (data.baseline && typeof data.baseline !== 'object') data.baseline = null;
   if (!data.pageTitles) data.pageTitles = {};
   if (!Array.isArray(data.pageOrder)) {
     data.pageOrder = ['main', ...Object.keys(data.diagrams).filter(k => k !== 'main').sort()];
@@ -174,8 +185,18 @@ export function normalizeState(data) {
         n.likely = Math.min(n.max, Math.max(n.min, n.likely));
         n.progress = Math.max(0, Math.min(100, numberOr(n.progress, 0)));
         if (!n.status) n.status = n.progress >= 100 ? 'done' : (n.progress > 0 ? 'in_progress' : 'not_started');
+        // Dependencies were a bare array of predecessor ids before precedence
+        // types and lag existed. Migrate to objects, de-duplicating by id.
         if (!Array.isArray(n.dependencies)) n.dependencies = [];
-        n.dependencies = [...new Set(n.dependencies.map(String).filter(d => d !== n.id))];
+        const byPredecessor = new Map();
+        n.dependencies.forEach(entry => {
+          const dep = toDependency(entry);
+          if (!dep.id || dep.id === n.id) return;
+          if (!DEPENDENCY_TYPES.includes(dep.type)) dep.type = 'FS';
+          if (!Number.isFinite(dep.lag)) dep.lag = 0;
+          byPredecessor.set(dep.id, dep);
+        });
+        n.dependencies = [...byPredecessor.values()];
         if (!n.position || typeof n.position !== 'object') n.position = { x: 0, y: 0 };
         n.position = { x: numberOr(n.position.x, 0), y: numberOr(n.position.y, 0) };
         if (n.linkedSubPage === undefined) n.linkedSubPage = null;
@@ -186,7 +207,7 @@ export function normalizeState(data) {
     // Drop dependencies pointing at tasks that no longer exist.
     diagram.milestones.forEach(ms => {
       ms.nodes.forEach(n => {
-        n.dependencies = n.dependencies.filter(d => seen.has(d));
+        n.dependencies = n.dependencies.filter(d => seen.has(d.id));
       });
     });
   });
@@ -215,6 +236,35 @@ export function normalizeState(data) {
 function numberOr(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function normalizeCalendar(input) {
+  const cal = { ...DEFAULT_CALENDAR, ...(input || {}) };
+  cal.enabled = !!cal.enabled;
+
+  const parsedStart = parseISODate(cal.startDate);
+  cal.startDate = parsedStart ? toISODate(parsedStart) : null;
+
+  const days = Array.isArray(cal.workdays)
+    ? [...new Set(cal.workdays.map(Number).filter(d => d >= 0 && d <= 6))].sort()
+    : [];
+  // A calendar with no working days can never advance; fall back to Mon–Fri.
+  cal.workdays = days.length ? days : [...DEFAULT_CALENDAR.workdays];
+
+  cal.holidays = Array.isArray(cal.holidays)
+    ? [...new Set(cal.holidays.map(h => toISODate(parseISODate(h))).filter(Boolean))].sort()
+    : [];
+
+  return cal;
+}
+
+/** Snapshot the current schedule so drift can be shown against it later. */
+export function captureBaseline(metrics, projectDuration) {
+  const tasks = {};
+  Object.values(metrics).forEach(m => {
+    tasks[m.id] = { ES: m.ES, EF: m.EF, LS: m.LS, LF: m.LF, duration: m.duration };
+  });
+  return { capturedAt: new Date().toISOString(), projectDuration, tasks };
 }
 
 // ─── Accessors ─────────────────────────────────────────────
