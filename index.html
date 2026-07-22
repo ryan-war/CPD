@@ -1,0 +1,1877 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Critical Path Network</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+  <style>
+    html, body { height: 100%; margin: 0; overflow: hidden; }
+    #network-canvas { width: 100%; height: 100%; background: #0f172a; }
+    .vis-network:focus { outline: none; }
+    .critical-glow {
+      box-shadow: 0 0 12px #ff4d4d, 0 0 4px #ff4d4d;
+      border-color: #ff4d4d !important;
+    }
+    .toast-enter { animation: toastIn 0.25s ease-out; }
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .modal-backdrop { background: rgba(2, 6, 23, 0.75); }
+    #bottom-panel::-webkit-scrollbar { width: 8px; }
+    #bottom-panel::-webkit-scrollbar-track { background: #0f172a; }
+    #bottom-panel::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    .link-badge {
+      position: absolute; top: -6px; right: -6px;
+      width: 18px; height: 18px; border-radius: 9999px;
+      background: #3b82f6; border: 2px solid #1e293b;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 9px; color: white; pointer-events: none;
+    }
+    /* Hide Vis.js built-in manipulation chrome while using addEdgeMode */
+    .vis-manipulation, .vis-edit-mode, .vis-close { display: none !important; }
+
+    /* Columns / swimlane view */
+    #work-area.swimlane-mode #bottom-panel { padding: 0; overflow-x: auto; overflow-y: hidden; }
+    #work-area.swimlane-mode #bottom-toolbar { padding: 0.5rem 1rem; border-bottom: 1px solid #334155; }
+    #work-area.swimlane-mode #milestones-container {
+      display: flex;
+      flex-direction: row;
+      align-items: stretch;
+      min-height: 100%;
+      height: calc(100% - 0px);
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+    #work-area.swimlane-mode .swim-col {
+      flex: 1 0 220px;
+      min-width: 220px;
+      max-width: 360px;
+      border-right: 1px solid #334155;
+      display: flex;
+      flex-direction: column;
+      background: rgba(15, 23, 42, 0.6);
+    }
+    #work-area.swimlane-mode .swim-col:last-child { border-right: none; }
+    #work-area.swimlane-mode .swim-col-head {
+      flex-shrink: 0;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid #334155;
+      background: rgba(30, 41, 59, 0.9);
+    }
+    #work-area.swimlane-mode .swim-col-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    #lane-overlay {
+      position: absolute; inset: 0; pointer-events: none; z-index: 1;
+      display: none;
+    }
+    #work-area.swimlane-mode #lane-overlay { display: flex; }
+    #lane-overlay .lane-band {
+      flex: 1;
+      border-right: 1px solid rgba(71, 85, 105, 0.55);
+      background: transparent;
+    }
+    #lane-overlay .lane-band:nth-child(odd) { background: rgba(30, 41, 59, 0.18); }
+    #lane-overlay .lane-band:last-child { border-right: none; }
+    #network-canvas { position: relative; z-index: 2; }
+  </style>
+</head>
+<body class="h-full bg-slate-900 text-slate-100 font-sans antialiased">
+  <div id="app" class="h-full flex flex-col">
+    <!-- Top Bar -->
+    <header class="flex-shrink-0 border-b border-slate-700 bg-slate-800/90 backdrop-blur px-3 py-2">
+      <div class="flex flex-wrap items-center gap-2 justify-between">
+        <div class="flex items-center gap-3 min-w-0">
+          <div class="flex items-center gap-2">
+            <i data-lucide="git-branch" class="w-5 h-5 text-[#ff4d4d]"></i>
+            <h1 id="project-title" class="text-sm font-semibold tracking-wide truncate max-w-[200px]" contenteditable="true" spellcheck="false">Critical Path Network</h1>
+          </div>
+          <nav id="page-tabs" class="flex items-center gap-1 bg-slate-900/60 rounded-lg p-0.5 border border-slate-700 max-w-[min(100%,520px)] overflow-x-auto"></nav>
+          <button id="btn-add-subpath" title="Add sub-path" class="shrink-0 px-2 py-1.5 text-xs rounded-md border border-dashed border-slate-600 text-slate-400 hover:text-slate-200 hover:border-slate-400 flex items-center gap-1">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Sub-Path
+          </button>
+        </div>
+        <div class="flex items-center gap-1.5 flex-wrap">
+          <button id="btn-connect" title="Connection mode" class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+            <i data-lucide="link" class="w-3.5 h-3.5"></i> Connect
+          </button>
+          <button id="btn-add-node" title="Add task" class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add Task
+          </button>
+          <button id="btn-auto-layout" title="CPM hierarchical layout" class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+            <i data-lucide="layout-dashboard" class="w-3.5 h-3.5"></i> Auto-Layout
+          </button>
+          <button id="btn-milestone-layout" title="Columns swimlane view — nodes and cards aligned by milestone" class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+            <i data-lucide="columns-3" class="w-3.5 h-3.5"></i> Columns
+          </button>
+          <button id="btn-fit" title="Reset zoom" class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+            <i data-lucide="maximize" class="w-3.5 h-3.5"></i> Fit
+          </button>
+          <div class="relative">
+            <button id="btn-display" title="Node display options" class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+              <i data-lucide="eye" class="w-3.5 h-3.5"></i> Display
+            </button>
+            <div id="display-menu" class="hidden absolute right-0 top-full mt-1 z-40 w-52 rounded-lg border border-slate-600 bg-slate-800 shadow-xl p-2 space-y-0.5">
+              <div class="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">Show on nodes</div>
+              <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="id" class="accent-[#ff4d4d]" checked disabled /> Node ID</label>
+              <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="title" class="accent-[#ff4d4d]" /> Title</label>
+              <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="minMax" class="accent-[#ff4d4d]" checked /> Min / Max</label>
+              <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="esEf" class="accent-[#ff4d4d]" checked /> ES / EF</label>
+              <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="lsLf" class="accent-[#ff4d4d]" checked /> LS / LF</label>
+              <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="slack" class="accent-[#ff4d4d]" checked /> Slack</label>
+              <label class="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-700 cursor-pointer text-xs"><input type="checkbox" data-display="link" class="accent-[#ff4d4d]" checked /> Link badge</label>
+            </div>
+          </div>
+          <div class="w-px h-5 bg-slate-600 mx-0.5"></div>
+          <button id="btn-save" title="Save JSON" class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+            <i data-lucide="download" class="w-3.5 h-3.5"></i> Save JSON
+          </button>
+          <label class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5 cursor-pointer">
+            <i data-lucide="upload" class="w-3.5 h-3.5"></i> Load JSON
+            <input id="file-input" type="file" accept=".json,application/json" class="hidden" />
+          </label>
+          <button id="btn-export-png" title="Export PNG" class="tool-btn px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-900 hover:bg-slate-700 flex items-center gap-1.5">
+            <i data-lucide="image" class="w-3.5 h-3.5"></i> Export PNG
+          </button>
+        </div>
+      </div>
+      <div id="cpm-summary" class="mt-1.5 text-[11px] text-slate-400 flex flex-wrap gap-x-4 gap-y-0.5">
+        <span>Project Duration: <span id="sum-duration" class="text-slate-200 font-medium">—</span></span>
+        <span>Critical Tasks: <span id="sum-critical" class="text-[#ff4d4d] font-medium">—</span></span>
+        <span class="text-slate-500">Tip: Connect = click pred → succ · double-click to edit · Alt+click link to jump · Del to remove</span>
+      </div>
+    </header>
+
+    <!-- Split panes -->
+    <div id="work-area" class="flex-1 min-h-0 flex flex-col">
+      <!-- Canvas 50% -->
+      <div class="h-1/2 min-h-0 relative border-b border-slate-700">
+        <div id="lane-overlay" aria-hidden="true"></div>
+        <div id="network-canvas"></div>
+        <div id="connect-hint" class="hidden absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-blue-600/90 text-xs font-medium shadow-lg z-10">
+          Connect: click predecessor, then successor
+        </div>
+      </div>
+
+      <!-- Bottom panel 50% -->
+      <div id="bottom-panel" class="h-1/2 min-h-0 overflow-y-auto bg-slate-900 p-4 flex flex-col">
+        <div id="bottom-toolbar" class="flex items-center justify-between mb-3 shrink-0">
+          <h2 class="text-sm font-semibold text-slate-200 flex items-center gap-2">
+            <i data-lucide="layers" class="w-4 h-4 text-slate-400"></i>
+            Milestones & Tasks
+            <span id="view-label" class="text-slate-500 font-normal">(Main Diagram)</span>
+          </h2>
+          <button id="btn-add-milestone" class="px-2.5 py-1.5 text-xs rounded-md border border-slate-600 bg-slate-800 hover:bg-slate-700 flex items-center gap-1.5">
+            <i data-lucide="folder-plus" class="w-3.5 h-3.5"></i> Add Milestone
+          </button>
+        </div>
+        <div id="milestones-container" class="space-y-4 flex-1 min-h-0"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toasts" class="fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none"></div>
+
+  <!-- Node Edit Modal -->
+  <div id="modal-node" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop p-4">
+    <div class="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+      <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700">
+        <h3 class="text-sm font-semibold">Edit Task</h3>
+        <button id="modal-node-close" class="p-1 rounded hover:bg-slate-700 text-slate-400"><i data-lucide="x" class="w-4 h-4"></i></button>
+      </div>
+      <form id="form-node" class="p-4 space-y-3">
+        <input type="hidden" id="edit-node-id" />
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Node ID</label>
+            <input id="edit-id" type="text" required class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Milestone</label>
+            <select id="edit-milestone" class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none"></select>
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Title</label>
+          <input id="edit-title" type="text" required class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none" />
+        </div>
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Description</label>
+          <textarea id="edit-description" rows="2" class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none resize-none"></textarea>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Min Duration (days)</label>
+            <input id="edit-min" type="number" min="0" step="0.5" required class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none" />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Max Duration (days)</label>
+            <input id="edit-max" type="number" min="0" step="0.5" required class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none" />
+          </div>
+        </div>
+        <div>
+          <label id="edit-linked-label" class="block text-xs text-slate-400 mb-1">Linked Sub-Page</label>
+          <select id="edit-linked" class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none">
+            <option value="">None</option>
+          </select>
+          <p id="edit-linked-hint" class="mt-1 text-[10px] text-slate-500">On the Main Diagram, link a task to a Sub-Path page.</p>
+        </div>
+        <div class="flex justify-between pt-2">
+          <button type="button" id="btn-delete-node" class="px-3 py-2 text-xs rounded-md border border-red-800 text-red-400 hover:bg-red-950 flex items-center gap-1.5">
+            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Delete
+          </button>
+          <div class="flex gap-2">
+            <button type="button" id="modal-node-cancel" class="px-3 py-2 text-xs rounded-md border border-slate-600 hover:bg-slate-700">Cancel</button>
+            <button type="submit" class="px-3 py-2 text-xs rounded-md bg-[#ff4d4d] hover:bg-red-500 text-white font-medium">Save</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Milestone Modal -->
+  <div id="modal-milestone" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop p-4">
+    <div class="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl w-full max-w-sm">
+      <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700">
+        <h3 id="modal-milestone-title" class="text-sm font-semibold">Add Milestone</h3>
+        <button id="modal-milestone-close" class="p-1 rounded hover:bg-slate-700 text-slate-400"><i data-lucide="x" class="w-4 h-4"></i></button>
+      </div>
+      <form id="form-milestone" class="p-4 space-y-3">
+        <input type="hidden" id="edit-ms-id" />
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Milestone Title</label>
+          <input id="edit-ms-title" type="text" required placeholder="e.g. Phase 2: Execution" class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none" />
+        </div>
+        <div class="flex justify-end gap-2 pt-1">
+          <button type="button" id="modal-milestone-cancel" class="px-3 py-2 text-xs rounded-md border border-slate-600 hover:bg-slate-700">Cancel</button>
+          <button type="submit" class="px-3 py-2 text-xs rounded-md bg-[#ff4d4d] hover:bg-red-500 text-white font-medium">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Sub-Path Modal -->
+  <div id="modal-subpath" class="hidden fixed inset-0 z-50 flex items-center justify-center modal-backdrop p-4">
+    <div class="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl w-full max-w-sm">
+      <div class="flex items-center justify-between px-4 py-3 border-b border-slate-700">
+        <h3 id="modal-subpath-title" class="text-sm font-semibold">Add Sub-Path</h3>
+        <button id="modal-subpath-close" class="p-1 rounded hover:bg-slate-700 text-slate-400"><i data-lucide="x" class="w-4 h-4"></i></button>
+      </div>
+      <form id="form-subpath" class="p-4 space-y-3">
+        <input type="hidden" id="edit-sp-id" />
+        <div>
+          <label class="block text-xs text-slate-400 mb-1">Sub-Path Name</label>
+          <input id="edit-sp-title" type="text" required placeholder="e.g. Sub-Path 4" class="w-full px-3 py-2 text-sm rounded-md bg-slate-900 border border-slate-600 focus:border-[#ff4d4d] outline-none" />
+        </div>
+        <div class="flex justify-between pt-1">
+          <button type="button" id="btn-delete-subpath" class="hidden px-3 py-2 text-xs rounded-md border border-red-800 text-red-400 hover:bg-red-950 flex items-center gap-1.5">
+            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Delete
+          </button>
+          <div class="flex gap-2 ml-auto">
+            <button type="button" id="modal-subpath-cancel" class="px-3 py-2 text-xs rounded-md border border-slate-600 hover:bg-slate-700">Cancel</button>
+            <button type="submit" class="px-3 py-2 text-xs rounded-md bg-[#ff4d4d] hover:bg-red-500 text-white font-medium">Save</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+(function () {
+  'use strict';
+
+  const DEFAULT_DISPLAY = {
+    id: true,
+    title: false,
+    minMax: true,
+    esEf: true,
+    lsLf: true,
+    slack: true,
+    link: true
+  };
+
+  const CRITICAL_COLOR = '#ff4d4d';
+  const NODE_BG = '#1e293b';
+  const NODE_BORDER = '#475569';
+  const EDGE_COLOR = '#64748b';
+  const LANE_COLORS = ['#1e3a5f', '#1a3d32', '#3d2a1a', '#3d1a2e', '#2a1a3d', '#1a353d'];
+  const COLUMN_GAP = 280;
+
+  // ─── State ───────────────────────────────────────────────
+  let state = createDefaultState();
+  let network = null;
+  let nodesDS = null;
+  let edgesDS = null;
+  let connectMode = false;
+  let connectSource = null;
+  let selectedNodeId = null;
+  let selectedEdgeId = null;
+  let suppressSync = false;
+
+  function createDefaultState() {
+    return {
+      projectTitle: 'Critical Path Network',
+      activeView: 'main',
+      layoutMode: 'free',
+      nodeDisplay: { ...DEFAULT_DISPLAY },
+      pageOrder: ['main', 'sub_1', 'sub_2', 'sub_3'],
+      pageTitles: {
+        main: 'Main Diagram',
+        sub_1: 'Sub-Path 1',
+        sub_2: 'Sub-Path 2',
+        sub_3: 'Sub-Path 3'
+      },
+      diagrams: {
+        main: {
+          milestones: [
+            {
+              id: 'm1',
+              title: 'Phase 1: Planning',
+              nodes: [
+                {
+                  id: 'A',
+                  title: 'Requirements Gathering',
+                  description: 'Collect baseline constraints and scope requirements.',
+                  min: 2,
+                  max: 4,
+                  dependencies: [],
+                  position: { x: 0, y: 20 },
+                  linkedSubPage: 'sub_1',
+                  linkedMainNode: null
+                }
+              ]
+            },
+            {
+              id: 'm2',
+              title: 'Phase 2: Design',
+              nodes: [
+                {
+                  id: 'B',
+                  title: 'Architecture Design',
+                  description: 'Design network diagram canvas workflow and CPM engine.',
+                  min: 3,
+                  max: 5,
+                  dependencies: ['A'],
+                  position: { x: 280, y: 20 },
+                  linkedSubPage: null,
+                  linkedMainNode: null
+                }
+              ]
+            },
+            {
+              id: 'm3',
+              title: 'Phase 3: Build',
+              nodes: [
+                {
+                  id: 'C',
+                  title: 'Frontend Build',
+                  description: 'Implement canvas UI and milestone panels.',
+                  min: 4,
+                  max: 6,
+                  dependencies: ['B'],
+                  position: { x: 560, y: -55 },
+                  linkedSubPage: null,
+                  linkedMainNode: null
+                },
+                {
+                  id: 'D',
+                  title: 'CPM Engine',
+                  description: 'Forward and backward pass calculations.',
+                  min: 3,
+                  max: 5,
+                  dependencies: ['B'],
+                  position: { x: 560, y: 95 },
+                  linkedSubPage: null,
+                  linkedMainNode: null
+                }
+              ]
+            },
+            {
+              id: 'm4',
+              title: 'Phase 4: Launch',
+              nodes: [
+                {
+                  id: 'E',
+                  title: 'Integration & Release',
+                  description: 'Merge paths, test, and publish to GitHub Pages.',
+                  min: 2,
+                  max: 3,
+                  dependencies: ['C', 'D'],
+                  position: { x: 840, y: 20 },
+                  linkedSubPage: null,
+                  linkedMainNode: null
+                }
+              ]
+            }
+          ]
+        },
+        sub_1: { milestones: [] },
+        sub_2: { milestones: [] },
+        sub_3: { milestones: [] }
+      }
+    };
+  }
+
+  function normalizeState(data) {
+    if (!data.nodeDisplay) data.nodeDisplay = { ...DEFAULT_DISPLAY };
+    else data.nodeDisplay = { ...DEFAULT_DISPLAY, ...data.nodeDisplay };
+    if (!data.layoutMode) data.layoutMode = 'free';
+    if (!data.pageTitles) data.pageTitles = {};
+    if (!data.pageOrder) {
+      data.pageOrder = ['main', ...Object.keys(data.diagrams || {}).filter(k => k !== 'main').sort()];
+    }
+    if (!data.pageTitles.main) data.pageTitles.main = 'Main Diagram';
+    Object.keys(data.diagrams || {}).forEach(k => {
+      if (!data.pageTitles[k]) {
+        data.pageTitles[k] = k === 'main' ? 'Main Diagram' : k.replace(/^sub_/, 'Sub-Path ').replace(/_/g, ' ');
+      }
+      if (!data.pageOrder.includes(k)) data.pageOrder.push(k);
+    });
+    // Ensure every pageOrder entry has a diagram
+    data.pageOrder.forEach(k => {
+      if (!data.diagrams[k]) data.diagrams[k] = { milestones: [] };
+    });
+    return data;
+  }
+
+  function pageTitle(id) {
+    return (state.pageTitles && state.pageTitles[id]) || id;
+  }
+
+  function findNodeInDiagram(nodeId, viewId) {
+    const d = state.diagrams[viewId];
+    if (!d) return null;
+    return findNode(nodeId, d);
+  }
+
+  function linkTooltip(n) {
+    if (n.linkedSubPage) return `\n→ ${pageTitle(n.linkedSubPage)}`;
+    if (n.linkedMainNode) {
+      const main = findNodeInDiagram(n.linkedMainNode, 'main');
+      const label = main ? `${n.linkedMainNode}: ${main.node.title}` : n.linkedMainNode;
+      return `\n→ Main · ${label}`;
+    }
+    return '';
+  }
+
+  function followNodeLink(n) {
+    if (n.linkedSubPage && state.diagrams[n.linkedSubPage]) {
+      switchView(n.linkedSubPage);
+      return true;
+    }
+    if (n.linkedMainNode) {
+      const target = findNodeInDiagram(n.linkedMainNode, 'main');
+      if (!target) {
+        toast(`Main node "${n.linkedMainNode}" not found`, 'error');
+        return false;
+      }
+      switchView('main');
+      setTimeout(() => {
+        if (!network) return;
+        try {
+          network.selectNodes([n.linkedMainNode]);
+          network.focus(n.linkedMainNode, {
+            scale: 1.2,
+            animation: { duration: 400, easingFunction: 'easeInOutQuad' }
+          });
+          selectedNodeId = n.linkedMainNode;
+        } catch (_) { /* ignore */ }
+      }, 120);
+      return true;
+    }
+    return false;
+  }
+
+  function linkBadgeHtml(n) {
+    if (n.linkedSubPage) {
+      return `<button data-goto-page="${n.linkedSubPage}" class="goto-link text-[10px] px-1.5 py-0.5 rounded bg-blue-600/30 text-blue-300 border border-blue-700 hover:bg-blue-600/50 flex items-center gap-0.5"><i data-lucide="external-link" class="w-3 h-3"></i>${escapeHtml(pageTitle(n.linkedSubPage))}</button>`;
+    }
+    if (n.linkedMainNode) {
+      const main = findNodeInDiagram(n.linkedMainNode, 'main');
+      const label = main ? `Main · ${n.linkedMainNode}` : `Main · ${n.linkedMainNode}?`;
+      return `<button data-goto-main="${escapeHtml(n.linkedMainNode)}" class="goto-main-link text-[10px] px-1.5 py-0.5 rounded bg-emerald-600/30 text-emerald-300 border border-emerald-700 hover:bg-emerald-600/50 flex items-center gap-0.5"><i data-lucide="corner-up-left" class="w-3 h-3"></i>${escapeHtml(label)}</button>`;
+    }
+    return '';
+  }
+
+  function subPageIds() {
+    return (state.pageOrder || []).filter(id => id !== 'main');
+  }
+
+  function uid(prefix) {
+    return prefix + '_' + Math.random().toString(36).slice(2, 9);
+  }
+
+  function currentDiagram() {
+    return state.diagrams[state.activeView];
+  }
+
+  function allNodes(diagram) {
+    const d = diagram || currentDiagram();
+    return (d.milestones || []).flatMap(m => m.nodes || []);
+  }
+
+  function findNode(nodeId, diagram) {
+    const d = diagram || currentDiagram();
+    for (const m of d.milestones) {
+      const n = m.nodes.find(x => x.id === nodeId);
+      if (n) return { node: n, milestone: m };
+    }
+    return null;
+  }
+
+  function durationOf(node) {
+    const min = Number(node.min) || 0;
+    const max = Number(node.max) || 0;
+    return (min + max) / 2;
+  }
+
+  function displayOpts() {
+    return state.nodeDisplay || DEFAULT_DISPLAY;
+  }
+
+  // ─── Toast ───────────────────────────────────────────────
+  function toast(message, type) {
+    const el = document.createElement('div');
+    const colors = {
+      error: 'bg-red-950 border-red-700 text-red-200',
+      success: 'bg-emerald-950 border-emerald-700 text-emerald-200',
+      info: 'bg-slate-800 border-slate-600 text-slate-200'
+    };
+    el.className = `toast-enter pointer-events-auto px-4 py-2.5 rounded-lg border text-sm shadow-xl max-w-sm ${colors[type] || colors.info}`;
+    el.textContent = message;
+    document.getElementById('toasts').appendChild(el);
+    setTimeout(() => {
+      el.style.opacity = '0';
+      el.style.transition = 'opacity 0.3s';
+      setTimeout(() => el.remove(), 300);
+    }, 3200);
+  }
+
+  // ─── Cycle Detection (DAG) ───────────────────────────────
+  function wouldCreateCycle(fromId, toId, nodes) {
+    // Adding edge fromId → toId (to depends on from). Cycle iff toId can already reach fromId.
+    const successors = {};
+    nodes.forEach(n => { successors[n.id] = []; });
+    nodes.forEach(n => {
+      (n.dependencies || []).forEach(dep => {
+        if (successors[dep]) successors[dep].push(n.id);
+      });
+    });
+
+    const stack = [toId];
+    const seen = new Set();
+    while (stack.length) {
+      const u = stack.pop();
+      if (u === fromId) return true;
+      if (seen.has(u)) continue;
+      seen.add(u);
+      (successors[u] || []).forEach(v => stack.push(v));
+    }
+    return false;
+  }
+
+  // ─── CPM Engine ──────────────────────────────────────────
+  function computeCPM(nodes) {
+    const byId = {};
+    nodes.forEach(n => {
+      byId[n.id] = {
+        ...n,
+        duration: durationOf(n),
+        ES: 0, EF: 0, LS: 0, LF: 0, slack: 0,
+        successors: []
+      };
+    });
+
+    nodes.forEach(n => {
+      (n.dependencies || []).forEach(dep => {
+        if (byId[dep]) byId[dep].successors.push(n.id);
+      });
+    });
+
+    // Topological order (Kahn)
+    const indeg = {};
+    Object.keys(byId).forEach(id => { indeg[id] = 0; });
+    Object.values(byId).forEach(n => {
+      (n.dependencies || []).forEach(dep => {
+        if (indeg[n.id] !== undefined && byId[dep]) indeg[n.id]++;
+      });
+    });
+
+    const queue = Object.keys(indeg).filter(id => indeg[id] === 0);
+    const order = [];
+    while (queue.length) {
+      const u = queue.shift();
+      order.push(u);
+      byId[u].successors.forEach(v => {
+        indeg[v]--;
+        if (indeg[v] === 0) queue.push(v);
+      });
+    }
+
+    if (order.length !== Object.keys(byId).length) {
+      // Cycle present — return zeros
+      return { metrics: byId, projectDuration: 0, criticalIds: new Set() };
+    }
+
+    // Forward pass
+    order.forEach(id => {
+      const n = byId[id];
+      const deps = (n.dependencies || []).filter(d => byId[d]);
+      n.ES = deps.length ? Math.max(...deps.map(d => byId[d].EF)) : 0;
+      n.EF = n.ES + n.duration;
+    });
+
+    const projectDuration = Object.values(byId).reduce((m, n) => Math.max(m, n.EF), 0);
+
+    // Backward pass
+    [...order].reverse().forEach(id => {
+      const n = byId[id];
+      if (!n.successors.length) {
+        n.LF = projectDuration;
+      } else {
+        n.LF = Math.min(...n.successors.map(s => byId[s].LS));
+      }
+      n.LS = n.LF - n.duration;
+      n.slack = +(n.LS - n.ES).toFixed(4);
+      if (Math.abs(n.slack) < 1e-9) n.slack = 0;
+    });
+
+    const criticalIds = new Set(
+      Object.values(byId).filter(n => n.slack === 0).map(n => n.id)
+    );
+
+    return { metrics: byId, projectDuration, criticalIds };
+  }
+
+  // ─── Vis.js rendering ────────────────────────────────────
+  function buildNodeLabel(n, m) {
+    const d = displayOpts();
+    const lines = [];
+    const hasLink = (d.link && (n.linkedSubPage || n.linkedMainNode));
+    const linkMark = hasLink ? ' 🔗' : '';
+    if (d.id) lines.push(`${n.id}${linkMark}`);
+    else if (linkMark) lines.push(linkMark.trim());
+    if (d.title && n.title) {
+      const t = n.title.length > 22 ? n.title.slice(0, 20) + '…' : n.title;
+      lines.push(t);
+    }
+    if (d.minMax) lines.push(`Min:${n.min}d Max:${n.max}d`);
+    if (d.esEf) lines.push(`ES:${fmt(m.ES)} EF:${fmt(m.EF)}`);
+    if (d.lsLf) lines.push(`LS:${fmt(m.LS)} LF:${fmt(m.LF)}`);
+    if (d.slack) lines.push(`Slack:${fmt(m.slack)}`);
+    return lines.join('\n') || n.id;
+  }
+
+  function nodeFontSize() {
+    const d = displayOpts();
+    const count = ['title', 'minMax', 'esEf', 'lsLf', 'slack'].filter(k => d[k]).length;
+    if (count >= 4) return 10;
+    if (count >= 2) return 11;
+    return 12;
+  }
+
+  function buildVisData() {
+    const nodes = allNodes();
+    const { metrics, projectDuration, criticalIds } = computeCPM(nodes);
+    const d = currentDiagram();
+    const milestoneIndex = {};
+    (d.milestones || []).forEach((ms, i) => { milestoneIndex[ms.id] = i; });
+
+    document.getElementById('sum-duration').textContent =
+      nodes.length ? projectDuration.toFixed(1) + 'd' : '—';
+    document.getElementById('sum-critical').textContent =
+      nodes.length ? [...criticalIds].join(', ') || 'none' : '—';
+
+    const visNodes = [];
+
+    // Milestone lane headers when in columns / swimlane mode
+    if (state.layoutMode === 'milestone') {
+      (d.milestones || []).forEach((ms, i) => {
+        visNodes.push({
+          id: `__lane__${ms.id}`,
+          label: ms.title,
+          x: i * COLUMN_GAP,
+          y: -200,
+          fixed: true,
+          shape: 'box',
+          margin: 10,
+          widthConstraint: { maximum: COLUMN_GAP - 40 },
+          font: { color: '#cbd5e1', size: 13, face: 'system-ui, sans-serif', multi: false, bold: true },
+          color: {
+            background: LANE_COLORS[i % LANE_COLORS.length],
+            border: '#64748b',
+            highlight: { background: LANE_COLORS[i % LANE_COLORS.length], border: '#94a3b8' },
+            hover: { background: LANE_COLORS[i % LANE_COLORS.length], border: '#94a3b8' }
+          },
+          borderWidth: 1,
+          shadow: false,
+          selectable: false,
+          chosen: false,
+          physics: false
+        });
+      });
+    }
+
+    nodes.forEach(n => {
+      const m = metrics[n.id];
+      const isCrit = criticalIds.has(n.id);
+      const found = findNode(n.id);
+      const msIdx = found ? (milestoneIndex[found.milestone.id] ?? 0) : 0;
+      const label = buildNodeLabel(n, m);
+      const lineCount = label.split('\n').length;
+      const size = Math.min(56, 32 + lineCount * 4);
+
+      visNodes.push({
+        id: n.id,
+        label,
+        x: n.position?.x ?? 0,
+        y: n.position?.y ?? 0,
+        fixed: false,
+        shape: 'circle',
+        size,
+        font: {
+          color: '#f1f5f9',
+          size: nodeFontSize(),
+          face: 'system-ui, sans-serif',
+          multi: true,
+          align: 'center',
+          bold: { color: '#f1f5f9', size: nodeFontSize() + 2 }
+        },
+        color: {
+          background: NODE_BG,
+          border: isCrit ? CRITICAL_COLOR : NODE_BORDER,
+          highlight: {
+            background: '#334155',
+            border: isCrit ? CRITICAL_COLOR : '#94a3b8'
+          },
+          hover: {
+            background: '#334155',
+            border: isCrit ? CRITICAL_COLOR : '#94a3b8'
+          }
+        },
+        borderWidth: isCrit ? 3 : 2,
+        shadow: isCrit
+          ? { enabled: true, color: CRITICAL_COLOR, size: 18, x: 0, y: 0 }
+          : { enabled: true, color: 'rgba(0,0,0,0.4)', size: 8, x: 0, y: 2 },
+        title: `${n.title}\n${n.description || ''}${linkTooltip(n)}\nMilestone: ${found?.milestone.title || '—'}`
+      });
+    });
+
+    const visEdges = [];
+    nodes.forEach(n => {
+      (n.dependencies || []).forEach(dep => {
+        if (!metrics[dep]) return;
+        const fromCrit = criticalIds.has(dep);
+        const toCrit = criticalIds.has(n.id);
+        const isCritEdge =
+          fromCrit && toCrit &&
+          Math.abs(metrics[n.id].ES - metrics[dep].EF) < 1e-6;
+
+        visEdges.push({
+          id: `${dep}->${n.id}`,
+          from: dep,
+          to: n.id,
+          arrows: { to: { enabled: true, scaleFactor: 0.7 } },
+          color: {
+            color: isCritEdge ? CRITICAL_COLOR : EDGE_COLOR,
+            highlight: isCritEdge ? CRITICAL_COLOR : '#94a3b8',
+            hover: isCritEdge ? CRITICAL_COLOR : '#94a3b8'
+          },
+          width: isCritEdge ? 3 : 1.5,
+          smooth: { type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.4 },
+          shadow: isCritEdge
+            ? { enabled: true, color: CRITICAL_COLOR, size: 10 }
+            : false
+        });
+      });
+    });
+
+    return { visNodes, visEdges, metrics, criticalIds };
+  }
+
+  function fmt(v) {
+    if (v == null || Number.isNaN(v)) return '—';
+    return Number.isInteger(v) ? String(v) : v.toFixed(1);
+  }
+
+  function syncNetwork(fit) {
+    const { visNodes, visEdges } = buildVisData();
+    suppressSync = true;
+    nodesDS.clear();
+    edgesDS.clear();
+    nodesDS.add(visNodes);
+    edgesDS.add(visEdges);
+    suppressSync = false;
+    updateSwimlaneChrome();
+    renderBottomPanel();
+    if (fit && network) {
+      setTimeout(() => network.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } }), 50);
+    }
+    if (connectMode && connectSource) {
+      setTimeout(() => refreshConnectHighlight(), 30);
+    }
+    lucide.createIcons();
+  }
+
+  function updateSwimlaneChrome() {
+    const work = document.getElementById('work-area');
+    const overlay = document.getElementById('lane-overlay');
+    const d = currentDiagram();
+    const on = state.layoutMode === 'milestone';
+    work.classList.toggle('swimlane-mode', on);
+    if (!on || !d.milestones.length) {
+      overlay.innerHTML = '';
+      return;
+    }
+    overlay.innerHTML = d.milestones.map(() => '<div class="lane-band"></div>').join('');
+  }
+
+  function initNetwork() {
+    const container = document.getElementById('network-canvas');
+    nodesDS = new vis.DataSet([]);
+    edgesDS = new vis.DataSet([]);
+
+    const options = {
+      physics: { enabled: false },
+      interaction: {
+        hover: true,
+        multiselect: false,
+        navigationButtons: false,
+        keyboard: false,
+        selectConnectedEdges: true
+      },
+      manipulation: {
+        enabled: false,
+        addEdgeKeys: false,
+        initiallyActive: false
+      },
+      edges: {
+        selectionWidth: 2,
+        hoverWidth: 1.5
+      },
+      nodes: {
+        chosen: true
+      }
+    };
+
+    network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, options);
+
+    // Draw vertical column dividers in Columns view (canvas space)
+    network.on('afterDrawing', ctx => {
+      if (state.layoutMode !== 'milestone') return;
+      const milestones = currentDiagram().milestones || [];
+      if (milestones.length < 2) return;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(100, 116, 139, 0.65)';
+      ctx.lineWidth = 1.5 / (network.getScale() || 1);
+      ctx.setLineDash([6, 6]);
+      for (let i = 0; i < milestones.length - 1; i++) {
+        const x = i * COLUMN_GAP + COLUMN_GAP / 2;
+        ctx.beginPath();
+        ctx.moveTo(x, -2000);
+        ctx.lineTo(x, 2000);
+        ctx.stroke();
+      }
+      ctx.restore();
+    });
+
+    // Drag-to-draw dependency arrows (Vis addEdgeMode)
+    network.on('dragEnd', params => {
+      if (!params.nodes.length) return;
+      let movedTask = false;
+      params.nodes.forEach(id => {
+        if (String(id).startsWith('__lane__')) return;
+        const pos = network.getPositions([id])[id];
+        const found = findNode(id);
+        if (found && pos) {
+          found.node.position = { x: pos.x, y: pos.y };
+          movedTask = true;
+        }
+      });
+      if (movedTask && state.layoutMode !== 'free') {
+        state.layoutMode = 'free';
+        updateLayoutButtons();
+      }
+    });
+
+    network.on('selectNode', params => {
+      const id = params.nodes[0] || null;
+      selectedNodeId = id && !String(id).startsWith('__lane__') ? id : null;
+      selectedEdgeId = null;
+    });
+
+    network.on('selectEdge', params => {
+      selectedEdgeId = params.edges[0] || null;
+      if (!params.nodes.length) selectedNodeId = null;
+    });
+
+    network.on('deselectNode', () => { selectedNodeId = null; });
+    network.on('deselectEdge', () => { selectedEdgeId = null; });
+
+    network.on('doubleClick', params => {
+      if (connectMode) return; // don't open modal / add nodes while connecting
+      if (params.nodes.length) {
+        const nid = params.nodes[0];
+        if (String(nid).startsWith('__lane__')) return;
+        const found = findNode(nid);
+        if ((params.event.srcEvent.altKey || params.event.srcEvent.metaKey) && found && followNodeLink(found.node)) return;
+        openNodeModal(nid);
+      } else if (params.edges.length === 0) {
+        const canvasPos = params.pointer.canvas;
+        addNodeAt(canvasPos.x, canvasPos.y);
+      }
+    });
+
+    network.on('click', params => {
+      if (!connectMode) {
+        if (params.nodes.length === 1 && (params.event.srcEvent.altKey || params.event.srcEvent.metaKey)) {
+          const nid = params.nodes[0];
+          if (String(nid).startsWith('__lane__')) return;
+          const found = findNode(nid);
+          if (found) followNodeLink(found.node);
+        }
+        return;
+      }
+
+      // Click-to-connect: source then target
+      if (!params.nodes.length) {
+        // click empty canvas cancels source selection
+        if (connectSource) {
+          connectSource = null;
+          refreshConnectHighlight();
+          toast('Connection cancelled', 'info');
+        }
+        return;
+      }
+      const clicked = params.nodes[0];
+      if (String(clicked).startsWith('__lane__')) return;
+
+      if (!connectSource) {
+        connectSource = clicked;
+        refreshConnectHighlight();
+        toast(`From ${clicked} — click the successor node`, 'info');
+      } else if (connectSource === clicked) {
+        connectSource = null;
+        refreshConnectHighlight();
+        toast('Source cleared', 'info');
+      } else {
+        const from = connectSource;
+        connectSource = null;
+        refreshConnectHighlight();
+        addDependency(from, clicked);
+      }
+    });
+
+    syncNetwork(true);
+  }
+
+  function refreshConnectHighlight() {
+    if (!nodesDS || !network) return;
+    const { visNodes } = buildVisData();
+    suppressSync = true;
+    visNodes.forEach(n => {
+      if (String(n.id).startsWith('__lane__')) return;
+      const isSource = connectMode && connectSource === n.id;
+      nodesDS.update({
+        id: n.id,
+        borderWidth: isSource ? 4 : n.borderWidth,
+        color: isSource
+          ? {
+              background: '#172554',
+              border: '#3b82f6',
+              highlight: { background: '#1e3a8a', border: '#60a5fa' },
+              hover: { background: '#1e3a8a', border: '#60a5fa' }
+            }
+          : n.color,
+        shadow: isSource
+          ? { enabled: true, color: '#3b82f6', size: 16, x: 0, y: 0 }
+          : n.shadow
+      });
+    });
+    suppressSync = false;
+  }
+
+  function enableEdgeDrawing() { /* click-to-connect only */ }
+
+  function disableEdgeDrawing() {
+    if (!network) return;
+    try { network.disableEditMode(); } catch (_) { /* ignore */ }
+    network.setOptions({
+      manipulation: { enabled: false },
+      interaction: { dragNodes: true }
+    });
+  }
+
+  // ─── Dependencies ────────────────────────────────────────
+  function addDependency(fromId, toId) {
+    if (String(fromId).startsWith('__lane__') || String(toId).startsWith('__lane__')) return;
+    const nodes = allNodes();
+    const found = findNode(toId);
+    if (!found) return;
+
+    if ((found.node.dependencies || []).includes(fromId)) {
+      toast('Dependency already exists', 'info');
+      return;
+    }
+
+    if (wouldCreateCycle(fromId, toId, nodes)) {
+      toast(`Cycle detected: cannot connect ${fromId} → ${toId}`, 'error');
+      return;
+    }
+
+    found.node.dependencies = [...(found.node.dependencies || []), fromId];
+    syncNetwork(false);
+    toast(`Connected ${fromId} → ${toId}`, 'success');
+  }
+
+  function removeSelected() {
+    if (selectedEdgeId) {
+      const parts = selectedEdgeId.split('->');
+      if (parts.length === 2) {
+        const [from, to] = parts;
+        const found = findNode(to);
+        if (found) {
+          found.node.dependencies = (found.node.dependencies || []).filter(d => d !== from);
+          selectedEdgeId = null;
+          syncNetwork(false);
+          toast(`Removed ${from} → ${to}`, 'info');
+          return;
+        }
+      }
+    }
+    if (selectedNodeId) {
+      deleteNode(selectedNodeId);
+      selectedNodeId = null;
+    }
+  }
+
+  function deleteNode(nodeId) {
+    const d = currentDiagram();
+    d.milestones.forEach(m => {
+      m.nodes = m.nodes.filter(n => n.id !== nodeId);
+      m.nodes.forEach(n => {
+        n.dependencies = (n.dependencies || []).filter(dep => dep !== nodeId);
+      });
+    });
+    // Clear reverse links from sub-paths when deleting a Main node
+    if (state.activeView === 'main') {
+      Object.keys(state.diagrams).forEach(viewId => {
+        if (viewId === 'main') return;
+        allNodes(state.diagrams[viewId]).forEach(n => {
+          if (n.linkedMainNode === nodeId) n.linkedMainNode = null;
+        });
+      });
+    }
+    syncNetwork(false);
+    toast(`Deleted node ${nodeId}`, 'info');
+  }
+
+  // ─── Add node ────────────────────────────────────────────
+  function addNodeAt(x, y) {
+    const d = currentDiagram();
+    if (!d.milestones.length) {
+      d.milestones.push({ id: uid('m'), title: 'Phase 1', nodes: [] });
+    }
+    const ms = d.milestones[0];
+    let newId = nextNodeId();
+    const node = {
+      id: newId,
+      title: 'New Task',
+      description: '',
+      min: 1,
+      max: 2,
+      dependencies: [],
+      position: { x: x || 0, y: y || 0 },
+      linkedSubPage: null,
+      linkedMainNode: null
+    };
+    ms.nodes.push(node);
+    syncNetwork(false);
+    openNodeModal(newId);
+  }
+
+  function nextNodeId() {
+    const existing = new Set(allNodes().map(n => n.id));
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    for (const ch of letters) {
+      if (!existing.has(ch)) return ch;
+      for (let i = 1; i < 100; i++) {
+        const id = ch + i;
+        if (!existing.has(id)) return id;
+      }
+    }
+    return uid('N');
+  }
+
+  // ─── Auto Layout ─────────────────────────────────────────
+  function autoLayout() {
+    const nodes = allNodes();
+    if (!nodes.length) {
+      toast('No tasks to layout', 'info');
+      return;
+    }
+
+    state.layoutMode = 'cpm';
+    updateLayoutButtons();
+
+    const { metrics } = computeCPM(nodes);
+    const levels = {};
+    Object.values(metrics).forEach(n => {
+      const deps = (n.dependencies || []).filter(d => metrics[d]);
+      levels[n.id] = deps.length ? Math.max(...deps.map(d => levels[d] ?? 0)) + 1 : 0;
+    });
+
+    const byLevel = {};
+    Object.keys(levels).forEach(id => {
+      const L = levels[id];
+      if (!byLevel[L]) byLevel[L] = [];
+      byLevel[L].push(id);
+    });
+
+    const xGap = 220;
+    const yGap = 140;
+    Object.keys(byLevel).sort((a, b) => a - b).forEach(L => {
+      const row = byLevel[L];
+      const totalH = (row.length - 1) * yGap;
+      row.forEach((id, i) => {
+        const found = findNode(id);
+        if (found) {
+          found.node.position = {
+            x: Number(L) * xGap,
+            y: -totalH / 2 + i * yGap
+          };
+        }
+      });
+    });
+
+    syncNetwork(true);
+    toast('CPM auto-layout applied', 'success');
+  }
+
+  function milestoneLayout() {
+    const d = currentDiagram();
+    if (!d.milestones.length) {
+      toast('Add a milestone first', 'info');
+      return;
+    }
+
+    state.layoutMode = 'milestone';
+    updateLayoutButtons();
+
+    const yGap = 150;
+    const startY = 20;
+
+    d.milestones.forEach((ms, col) => {
+      const list = ms.nodes || [];
+      // Stack nodes in the column; slight vertical spread for parallel look
+      const totalH = Math.max(0, (list.length - 1) * yGap);
+      list.forEach((n, row) => {
+        n.position = {
+          x: col * COLUMN_GAP,
+          y: startY - totalH / 2 + row * yGap
+        };
+      });
+    });
+
+    syncNetwork(true);
+    toast('Columns view — nodes & cards aligned by milestone', 'success');
+  }
+
+  function updateLayoutButtons() {
+    const cpmBtn = document.getElementById('btn-auto-layout');
+    const msBtn = document.getElementById('btn-milestone-layout');
+    const base = 'tool-btn px-2.5 py-1.5 text-xs rounded-md border flex items-center gap-1.5';
+    cpmBtn.className = `${base} ${state.layoutMode === 'cpm' ? 'border-[#ff4d4d]/50 bg-[#ff4d4d]/20 text-[#ff4d4d]' : 'border-slate-600 bg-slate-900 hover:bg-slate-700'}`;
+    msBtn.className = `${base} ${state.layoutMode === 'milestone' ? 'border-[#ff4d4d]/50 bg-[#ff4d4d]/20 text-[#ff4d4d]' : 'border-slate-600 bg-slate-900 hover:bg-slate-700'}`;
+    cpmBtn.innerHTML = '<i data-lucide="layout-dashboard" class="w-3.5 h-3.5"></i> Auto-Layout';
+    msBtn.innerHTML = '<i data-lucide="columns-3" class="w-3.5 h-3.5"></i> Columns';
+    lucide.createIcons();
+  }
+
+  // ─── Views / Tabs ────────────────────────────────────────
+  function switchView(view) {
+    if (!state.diagrams[view]) return;
+    savePositionsFromNetwork();
+    state.activeView = view;
+    updateTabUI();
+    syncNetwork(true);
+  }
+
+  function savePositionsFromNetwork() {
+    if (!network) return;
+    const nodes = allNodes();
+    if (!nodes.length) return;
+    const positions = network.getPositions(nodes.map(n => n.id));
+    nodes.forEach(n => {
+      if (positions[n.id]) {
+        n.position = { x: positions[n.id].x, y: positions[n.id].y };
+      }
+    });
+  }
+
+  function updateTabUI() {
+    const nav = document.getElementById('page-tabs');
+    nav.innerHTML = (state.pageOrder || []).map(id => {
+      const active = id === state.activeView;
+      const cls = active
+        ? 'tab-btn px-3 py-1.5 text-xs rounded-md bg-[#ff4d4d]/20 text-[#ff4d4d] font-medium whitespace-nowrap'
+        : 'tab-btn px-3 py-1.5 text-xs rounded-md text-slate-400 hover:text-slate-200 whitespace-nowrap';
+      const renameHint = id !== 'main' ? ' title="Double-click to rename"' : '';
+      return `<button data-view="${id}" class="${cls}"${renameHint}>${escapeHtml(pageTitle(id))}</button>`;
+    }).join('');
+
+    nav.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => switchView(btn.dataset.view));
+      btn.addEventListener('dblclick', e => {
+        e.preventDefault();
+        if (btn.dataset.view === 'main') return;
+        openSubpathModal(btn.dataset.view);
+      });
+    });
+
+    document.getElementById('view-label').textContent = `(${pageTitle(state.activeView)})`;
+    document.getElementById('project-title').textContent = state.projectTitle;
+    updateLayoutButtons();
+    syncDisplayMenu();
+    lucide.createIcons();
+  }
+
+  function syncDisplayMenu() {
+    const d = displayOpts();
+    document.querySelectorAll('#display-menu [data-display]').forEach(cb => {
+      const key = cb.dataset.display;
+      if (key === 'id') { cb.checked = true; return; }
+      cb.checked = !!d[key];
+    });
+  }
+
+  // ─── Sub-Paths ───────────────────────────────────────────
+  function openSubpathModal(spId) {
+    const titleEl = document.getElementById('modal-subpath-title');
+    const delBtn = document.getElementById('btn-delete-subpath');
+    if (spId) {
+      titleEl.textContent = 'Edit Sub-Path';
+      document.getElementById('edit-sp-id').value = spId;
+      document.getElementById('edit-sp-title').value = pageTitle(spId);
+      delBtn.classList.remove('hidden');
+    } else {
+      titleEl.textContent = 'Add Sub-Path';
+      document.getElementById('edit-sp-id').value = '';
+      const n = subPageIds().length + 1;
+      document.getElementById('edit-sp-title').value = `Sub-Path ${n}`;
+      delBtn.classList.add('hidden');
+    }
+    document.getElementById('modal-subpath').classList.remove('hidden');
+    lucide.createIcons();
+  }
+
+  function closeSubpathModal() {
+    document.getElementById('modal-subpath').classList.add('hidden');
+  }
+
+  function saveSubpathForm(e) {
+    e.preventDefault();
+    const id = document.getElementById('edit-sp-id').value;
+    const title = document.getElementById('edit-sp-title').value.trim();
+    if (!title) return;
+
+    if (id) {
+      state.pageTitles[id] = title;
+    } else {
+      let num = 1;
+      while (state.diagrams[`sub_${num}`]) num++;
+      const newId = `sub_${num}`;
+      state.diagrams[newId] = { milestones: [] };
+      state.pageTitles[newId] = title;
+      if (!state.pageOrder.includes(newId)) state.pageOrder.push(newId);
+      state.activeView = newId;
+    }
+    closeSubpathModal();
+    updateTabUI();
+    syncNetwork(true);
+    toast(id ? 'Sub-path renamed' : 'Sub-path added', 'success');
+  }
+
+  function deleteSubpath() {
+    const id = document.getElementById('edit-sp-id').value;
+    if (!id || id === 'main') return;
+    if (!confirm(`Delete "${pageTitle(id)}" and all of its milestones/tasks?`)) return;
+
+    // Clear links pointing to this page
+    Object.values(state.diagrams).forEach(diag => {
+      (diag.milestones || []).forEach(ms => {
+        (ms.nodes || []).forEach(n => {
+          if (n.linkedSubPage === id) n.linkedSubPage = null;
+        });
+      });
+    });
+
+    delete state.diagrams[id];
+    delete state.pageTitles[id];
+    state.pageOrder = state.pageOrder.filter(p => p !== id);
+    if (state.activeView === id) state.activeView = 'main';
+    closeSubpathModal();
+    updateTabUI();
+    syncNetwork(true);
+    toast('Sub-path deleted', 'info');
+  }
+
+  function populateLinkedSelect(currentValue) {
+    const linkedSel = document.getElementById('edit-linked');
+    const label = document.getElementById('edit-linked-label');
+    const hint = document.getElementById('edit-linked-hint');
+
+    if (state.activeView === 'main') {
+      label.textContent = 'Linked Sub-Page';
+      hint.textContent = 'Jump from this Main task into a Sub-Path diagram.';
+      linkedSel.disabled = false;
+      linkedSel.innerHTML = ['<option value="">None</option>']
+        .concat(subPageIds().map(id =>
+          `<option value="${id}" ${id === currentValue ? 'selected' : ''}>${escapeHtml(pageTitle(id))}</option>`
+        )).join('');
+    } else {
+      label.textContent = 'Linked Main Node';
+      hint.textContent = 'Jump from this Sub-Path task back to a node on the Main Diagram.';
+      linkedSel.disabled = false;
+      const mainNodes = allNodes(state.diagrams.main);
+      linkedSel.innerHTML = ['<option value="">None</option>']
+        .concat(mainNodes.map(n =>
+          `<option value="${escapeHtml(n.id)}" ${n.id === currentValue ? 'selected' : ''}>${escapeHtml(n.id)} — ${escapeHtml(n.title)}</option>`
+        )).join('');
+      if (!mainNodes.length) {
+        hint.textContent = 'No tasks on the Main Diagram yet. Add one there first.';
+      }
+    }
+  }
+
+  // ─── Bottom Panel ────────────────────────────────────────
+  function taskCardHtml(n, metrics, criticalIds, successors) {
+    const m = metrics[n.id] || {};
+    const isCrit = criticalIds.has(n.id);
+    const preds = (n.dependencies || []);
+    const succs = successors[n.id] || [];
+    return `
+      <div class="bg-slate-800 border ${isCrit ? 'border-[#ff4d4d] critical-glow' : 'border-slate-700'} rounded-lg p-3 flex flex-col gap-2">
+        <div class="flex items-start justify-between gap-2">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold ${isCrit ? 'bg-[#ff4d4d]/20 text-[#ff4d4d] border border-[#ff4d4d]' : 'bg-slate-900 text-slate-200 border border-slate-600'}">${escapeHtml(n.id)}</span>
+              <span class="text-sm font-medium truncate">${escapeHtml(n.title)}</span>
+              ${linkBadgeHtml(n)}
+            </div>
+            <p class="text-xs text-slate-400 mt-1 line-clamp-2">${escapeHtml(n.description || 'No description')}</p>
+          </div>
+          <button data-edit-node="${escapeHtml(n.id)}" class="edit-node-btn p-1.5 rounded hover:bg-slate-700 text-slate-400 shrink-0"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button>
+        </div>
+        <div class="grid grid-cols-3 gap-1.5 text-[10px]">
+          <div class="bg-slate-900/80 rounded px-1.5 py-1 border border-slate-700/80">
+            <div class="text-slate-500">Duration</div>
+            <div class="text-slate-200">Min ${n.min}d · Max ${n.max}d</div>
+          </div>
+          <div class="bg-slate-900/80 rounded px-1.5 py-1 border border-slate-700/80">
+            <div class="text-slate-500">ES / EF</div>
+            <div class="text-slate-200">${fmt(m.ES)} / ${fmt(m.EF)}</div>
+          </div>
+          <div class="bg-slate-900/80 rounded px-1.5 py-1 border ${isCrit ? 'border-[#ff4d4d]/40' : 'border-slate-700/80'}">
+            <div class="text-slate-500">Slack</div>
+            <div class="${isCrit ? 'text-[#ff4d4d] font-semibold' : 'text-slate-200'}">${fmt(m.slack)}d ${isCrit ? '· CRITICAL' : ''}</div>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-1 text-[10px]">
+          <span class="text-slate-500 self-center">Pred:</span>
+          ${preds.length ? preds.map(p => `<span class="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-600 text-slate-300">${escapeHtml(p)}</span>`).join('') : '<span class="text-slate-600">none</span>'}
+          <span class="text-slate-500 self-center ml-1">Succ:</span>
+          ${succs.length ? succs.map(s => `<span class="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-600 text-slate-300">${escapeHtml(s)}</span>`).join('') : '<span class="text-slate-600">none</span>'}
+        </div>
+      </div>`;
+  }
+
+  function bindBottomPanelEvents(container) {
+    container.querySelectorAll('.edit-node-btn').forEach(btn => {
+      btn.addEventListener('click', () => openNodeModal(btn.dataset.editNode));
+    });
+    container.querySelectorAll('.goto-link').forEach(btn => {
+      btn.addEventListener('click', () => switchView(btn.dataset.gotoPage));
+    });
+    container.querySelectorAll('.goto-main-link').forEach(btn => {
+      btn.addEventListener('click', () => {
+        followNodeLink({ linkedMainNode: btn.dataset.gotoMain });
+      });
+    });
+    container.querySelectorAll('.add-to-ms').forEach(btn => {
+      btn.addEventListener('click', () => addNodeToMilestone(btn.dataset.addToMs));
+    });
+    container.querySelectorAll('.edit-ms').forEach(btn => {
+      btn.addEventListener('click', () => openMilestoneModal(btn.dataset.editMs));
+    });
+    container.querySelectorAll('.del-ms').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.delMs;
+        const d = currentDiagram();
+        const ms = d.milestones.find(m => m.id === id);
+        if (!ms) return;
+        if (ms.nodes.length && !confirm(`Delete milestone "${ms.title}" and its ${ms.nodes.length} task(s)?`)) return;
+        const ids = new Set(ms.nodes.map(n => n.id));
+        d.milestones = d.milestones.filter(m => m.id !== id);
+        d.milestones.forEach(m => {
+          m.nodes.forEach(n => {
+            n.dependencies = (n.dependencies || []).filter(dep => !ids.has(dep));
+          });
+        });
+        if (state.activeView === 'main') {
+          Object.keys(state.diagrams).forEach(viewId => {
+            if (viewId === 'main') return;
+            allNodes(state.diagrams[viewId]).forEach(n => {
+              if (ids.has(n.linkedMainNode)) n.linkedMainNode = null;
+            });
+          });
+        }
+        if (state.layoutMode === 'milestone') milestoneLayout();
+        else syncNetwork(false);
+      });
+    });
+  }
+
+  function renderBottomPanel() {
+    const container = document.getElementById('milestones-container');
+    const d = currentDiagram();
+    const nodes = allNodes();
+    const { metrics, criticalIds } = computeCPM(nodes);
+    const columnsMode = state.layoutMode === 'milestone';
+
+    const successors = {};
+    nodes.forEach(n => { successors[n.id] = []; });
+    nodes.forEach(n => {
+      (n.dependencies || []).forEach(dep => {
+        if (successors[dep]) successors[dep].push(n.id);
+      });
+    });
+
+    if (!d.milestones.length) {
+      container.className = columnsMode ? '' : 'space-y-4 flex-1 min-h-0';
+      container.innerHTML = `
+        <div class="text-center py-10 text-slate-500 text-sm w-full">
+          No milestones yet. Click <strong class="text-slate-300">Add Milestone</strong> to get started.
+        </div>`;
+      return;
+    }
+
+    if (columnsMode) {
+      container.className = '';
+      container.innerHTML = d.milestones.map(ms => {
+        const cards = (ms.nodes || []).map(n => taskCardHtml(n, metrics, criticalIds, successors)).join('');
+        return `
+          <div class="swim-col">
+            <div class="swim-col-head flex items-center justify-between gap-2">
+              <h3 class="text-xs font-semibold text-slate-200 truncate" title="${escapeHtml(ms.title)}">${escapeHtml(ms.title)}</h3>
+              <div class="flex items-center gap-0.5 shrink-0">
+                <button data-add-to-ms="${ms.id}" class="add-to-ms p-1 rounded hover:bg-slate-700 text-slate-400" title="Add task"><i data-lucide="plus" class="w-3.5 h-3.5"></i></button>
+                <button data-edit-ms="${ms.id}" class="edit-ms p-1 rounded hover:bg-slate-700 text-slate-400" title="Rename"><i data-lucide="pencil" class="w-3 h-3"></i></button>
+                <button data-del-ms="${ms.id}" class="del-ms p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-red-400" title="Delete"><i data-lucide="trash-2" class="w-3 h-3"></i></button>
+              </div>
+            </div>
+            <div class="swim-col-body">
+              ${cards || '<p class="text-xs text-slate-500">No tasks</p>'}
+            </div>
+          </div>`;
+      }).join('');
+    } else {
+      container.className = 'space-y-4 flex-1 min-h-0';
+      container.innerHTML = d.milestones.map(ms => {
+        const cards = (ms.nodes || []).map(n => taskCardHtml(n, metrics, criticalIds, successors)).join('');
+        return `
+          <section class="border border-slate-700 rounded-xl bg-slate-800/40 overflow-hidden">
+            <div class="flex items-center justify-between px-3 py-2 border-b border-slate-700 bg-slate-800/80">
+              <h3 class="text-sm font-medium text-slate-200">${escapeHtml(ms.title)}</h3>
+              <div class="flex items-center gap-1">
+                <button data-add-to-ms="${ms.id}" class="add-to-ms px-2 py-1 text-[11px] rounded border border-slate-600 hover:bg-slate-700 flex items-center gap-1"><i data-lucide="plus" class="w-3 h-3"></i> Task</button>
+                <button data-edit-ms="${ms.id}" class="edit-ms p-1.5 rounded hover:bg-slate-700 text-slate-400"><i data-lucide="pencil" class="w-3.5 h-3.5"></i></button>
+                <button data-del-ms="${ms.id}" class="del-ms p-1.5 rounded hover:bg-slate-700 text-slate-400 hover:text-red-400"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+              </div>
+            </div>
+            <div class="p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              ${cards || '<p class="text-xs text-slate-500 col-span-full">No tasks in this milestone.</p>'}
+            </div>
+          </section>`;
+      }).join('');
+    }
+
+    bindBottomPanelEvents(container);
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function addNodeToMilestone(msId) {
+    const d = currentDiagram();
+    const ms = d.milestones.find(m => m.id === msId);
+    if (!ms) return;
+    const newId = nextNodeId();
+    const count = allNodes().length;
+    ms.nodes.push({
+      id: newId,
+      title: 'New Task',
+      description: '',
+      min: 1,
+      max: 2,
+      dependencies: [],
+      position: { x: (count % 5) * 180, y: Math.floor(count / 5) * 120 },
+      linkedSubPage: null,
+      linkedMainNode: null
+    });
+    syncNetwork(false);
+    openNodeModal(newId);
+  }
+
+  // ─── Node Modal ──────────────────────────────────────────
+  function openNodeModal(nodeId) {
+    if (!nodeId || String(nodeId).startsWith('__lane__')) return;
+    const found = findNode(nodeId);
+    if (!found) return;
+    const { node, milestone } = found;
+    const d = currentDiagram();
+
+    document.getElementById('edit-node-id').value = node.id;
+    document.getElementById('edit-id').value = node.id;
+    document.getElementById('edit-title').value = node.title;
+    document.getElementById('edit-description').value = node.description || '';
+    document.getElementById('edit-min').value = node.min;
+    document.getElementById('edit-max').value = node.max;
+
+    const linkValue = state.activeView === 'main'
+      ? (node.linkedSubPage || '')
+      : (node.linkedMainNode || '');
+    populateLinkedSelect(linkValue);
+
+    const sel = document.getElementById('edit-milestone');
+    sel.innerHTML = d.milestones.map(m =>
+      `<option value="${m.id}" ${m.id === milestone.id ? 'selected' : ''}>${escapeHtml(m.title)}</option>`
+    ).join('');
+
+    document.getElementById('modal-node').classList.remove('hidden');
+    lucide.createIcons();
+  }
+
+  function closeNodeModal() {
+    document.getElementById('modal-node').classList.add('hidden');
+  }
+
+  function saveNodeForm(e) {
+    e.preventDefault();
+    const oldId = document.getElementById('edit-node-id').value;
+    const newId = document.getElementById('edit-id').value.trim();
+    const found = findNode(oldId);
+    if (!found) return;
+
+    if (!newId) {
+      toast('Node ID is required', 'error');
+      return;
+    }
+
+    // Check ID uniqueness if changed
+    if (newId !== oldId && findNode(newId)) {
+      toast(`Node ID "${newId}" already exists`, 'error');
+      return;
+    }
+
+    const min = Number(document.getElementById('edit-min').value);
+    const max = Number(document.getElementById('edit-max').value);
+    if (max < min) {
+      toast('Max duration must be ≥ Min', 'error');
+      return;
+    }
+
+    const targetMsId = document.getElementById('edit-milestone').value;
+    const node = found.node;
+    node.title = document.getElementById('edit-title').value.trim();
+    node.description = document.getElementById('edit-description').value.trim();
+    node.min = min;
+    node.max = max;
+    const linkVal = document.getElementById('edit-linked').value || null;
+    if (state.activeView === 'main') {
+      node.linkedSubPage = linkVal;
+      node.linkedMainNode = null;
+    } else {
+      node.linkedMainNode = linkVal;
+      node.linkedSubPage = null;
+    }
+
+    // Rename ID across deps
+    if (newId !== oldId) {
+      node.id = newId;
+      allNodes().forEach(n => {
+        n.dependencies = (n.dependencies || []).map(d => d === oldId ? newId : d);
+      });
+      // Update reverse links from sub-paths when renaming a Main node
+      if (state.activeView === 'main') {
+        Object.keys(state.diagrams).forEach(viewId => {
+          if (viewId === 'main') return;
+          allNodes(state.diagrams[viewId]).forEach(n => {
+            if (n.linkedMainNode === oldId) n.linkedMainNode = newId;
+          });
+        });
+      }
+    }
+
+    // Move milestone if needed
+    if (targetMsId !== found.milestone.id) {
+      found.milestone.nodes = found.milestone.nodes.filter(n => n.id !== node.id);
+      const target = currentDiagram().milestones.find(m => m.id === targetMsId);
+      if (target) target.nodes.push(node);
+    }
+
+    closeNodeModal();
+    syncNetwork(false);
+    toast('Task saved', 'success');
+  }
+
+  // ─── Milestone Modal ─────────────────────────────────────
+  function openMilestoneModal(msId) {
+    const titleEl = document.getElementById('modal-milestone-title');
+    if (msId) {
+      const ms = currentDiagram().milestones.find(m => m.id === msId);
+      if (!ms) return;
+      titleEl.textContent = 'Edit Milestone';
+      document.getElementById('edit-ms-id').value = ms.id;
+      document.getElementById('edit-ms-title').value = ms.title;
+    } else {
+      titleEl.textContent = 'Add Milestone';
+      document.getElementById('edit-ms-id').value = '';
+      document.getElementById('edit-ms-title').value = '';
+    }
+    document.getElementById('modal-milestone').classList.remove('hidden');
+    lucide.createIcons();
+  }
+
+  function closeMilestoneModal() {
+    document.getElementById('modal-milestone').classList.add('hidden');
+  }
+
+  function saveMilestoneForm(e) {
+    e.preventDefault();
+    const id = document.getElementById('edit-ms-id').value;
+    const title = document.getElementById('edit-ms-title').value.trim();
+    if (!title) return;
+    const d = currentDiagram();
+    if (id) {
+      const ms = d.milestones.find(m => m.id === id);
+      if (ms) ms.title = title;
+    } else {
+      d.milestones.push({ id: uid('m'), title, nodes: [] });
+    }
+    closeMilestoneModal();
+    if (state.layoutMode === 'milestone') milestoneLayout();
+    else syncNetwork(false);
+  }
+
+  // ─── Import / Export ─────────────────────────────────────
+  function saveJSON() {
+    savePositionsFromNetwork();
+    state.projectTitle = document.getElementById('project-title').textContent.trim() || 'Critical Path Network';
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (state.projectTitle.replace(/[^\w\-]+/g, '_') || 'cpm_project') + '.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('JSON downloaded', 'success');
+  }
+
+  function loadJSON(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (!data.diagrams || !data.diagrams.main) {
+          throw new Error('Invalid project file: missing diagrams.main');
+        }
+        state = normalizeState(data);
+        if (!state.activeView || !state.diagrams[state.activeView]) state.activeView = 'main';
+        updateTabUI();
+        syncNetwork(true);
+        toast('Project loaded', 'success');
+      } catch (err) {
+        toast('Failed to load JSON: ' + err.message, 'error');
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function exportPNG() {
+    if (!network) return;
+    try {
+      // High-res: temporarily scale
+      const canvas = document.querySelector('#network-canvas canvas');
+      if (!canvas) {
+        toast('Canvas not ready', 'error');
+        return;
+      }
+      const dataUrl = canvas.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = (state.projectTitle.replace(/[^\w\-]+/g, '_') || 'diagram') + '.png';
+      a.click();
+      toast('PNG exported', 'success');
+    } catch (err) {
+      toast('Export failed: ' + err.message, 'error');
+    }
+  }
+
+  // ─── Connect mode UI ─────────────────────────────────────
+  function setConnectMode(on) {
+    connectMode = on;
+    connectSource = null;
+    const btn = document.getElementById('btn-connect');
+    const hint = document.getElementById('connect-hint');
+    if (on) {
+      btn.classList.add('bg-blue-600', 'border-blue-500', 'text-white');
+      btn.classList.remove('bg-slate-900');
+      hint.classList.remove('hidden');
+      hint.textContent = 'Connect: click predecessor, then successor (Esc to cancel)';
+      disableEdgeDrawing();
+      if (network) {
+        network.setOptions({ interaction: { dragNodes: false } });
+      }
+    } else {
+      btn.classList.remove('bg-blue-600', 'border-blue-500', 'text-white');
+      btn.classList.add('bg-slate-900');
+      hint.classList.add('hidden');
+      disableEdgeDrawing();
+      if (network) {
+        network.setOptions({ interaction: { dragNodes: true } });
+      }
+      // restore node styles
+      syncNetwork(false);
+    }
+  }
+
+  // ─── Event wiring ────────────────────────────────────────
+  function wireEvents() {
+    document.getElementById('btn-add-subpath').addEventListener('click', () => openSubpathModal(null));
+
+    document.getElementById('btn-connect').addEventListener('click', () => {
+      setConnectMode(!connectMode);
+    });
+
+    document.getElementById('btn-add-node').addEventListener('click', () => addNodeAt(0, 0));
+    document.getElementById('btn-auto-layout').addEventListener('click', autoLayout);
+    document.getElementById('btn-milestone-layout').addEventListener('click', milestoneLayout);
+    document.getElementById('btn-fit').addEventListener('click', () => {
+      if (network) network.fit({ animation: { duration: 300, easingFunction: 'easeInOutQuad' } });
+    });
+
+    const displayBtn = document.getElementById('btn-display');
+    const displayMenu = document.getElementById('display-menu');
+    displayBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      displayMenu.classList.toggle('hidden');
+    });
+    document.addEventListener('click', e => {
+      if (!displayMenu.contains(e.target) && e.target !== displayBtn && !displayBtn.contains(e.target)) {
+        displayMenu.classList.add('hidden');
+      }
+    });
+    displayMenu.addEventListener('change', e => {
+      const cb = e.target.closest('[data-display]');
+      if (!cb || cb.dataset.display === 'id') return;
+      state.nodeDisplay[cb.dataset.display] = cb.checked;
+      syncNetwork(false);
+    });
+
+    document.getElementById('btn-save').addEventListener('click', saveJSON);
+    document.getElementById('btn-export-png').addEventListener('click', exportPNG);
+    document.getElementById('file-input').addEventListener('change', e => {
+      const f = e.target.files?.[0];
+      if (f) loadJSON(f);
+      e.target.value = '';
+    });
+
+    document.getElementById('btn-add-milestone').addEventListener('click', () => openMilestoneModal(null));
+
+    document.getElementById('form-node').addEventListener('submit', saveNodeForm);
+    document.getElementById('modal-node-close').addEventListener('click', closeNodeModal);
+    document.getElementById('modal-node-cancel').addEventListener('click', closeNodeModal);
+    document.getElementById('btn-delete-node').addEventListener('click', () => {
+      const id = document.getElementById('edit-node-id').value;
+      closeNodeModal();
+      deleteNode(id);
+    });
+
+    document.getElementById('form-milestone').addEventListener('submit', saveMilestoneForm);
+    document.getElementById('modal-milestone-close').addEventListener('click', closeMilestoneModal);
+    document.getElementById('modal-milestone-cancel').addEventListener('click', closeMilestoneModal);
+
+    document.getElementById('form-subpath').addEventListener('submit', saveSubpathForm);
+    document.getElementById('modal-subpath-close').addEventListener('click', closeSubpathModal);
+    document.getElementById('modal-subpath-cancel').addEventListener('click', closeSubpathModal);
+    document.getElementById('btn-delete-subpath').addEventListener('click', deleteSubpath);
+
+    document.getElementById('project-title').addEventListener('blur', () => {
+      state.projectTitle = document.getElementById('project-title').textContent.trim() || 'Critical Path Network';
+    });
+
+    document.addEventListener('keydown', e => {
+      const tag = (e.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        removeSelected();
+      }
+      if (e.key === 'Escape') {
+        setConnectMode(false);
+        closeNodeModal();
+        closeMilestoneModal();
+        closeSubpathModal();
+        document.getElementById('display-menu').classList.add('hidden');
+      }
+      if (e.key === 'c' && !e.ctrlKey && !e.metaKey) {
+        setConnectMode(!connectMode);
+      }
+    });
+
+    document.getElementById('modal-node').addEventListener('click', e => {
+      if (e.target.id === 'modal-node') closeNodeModal();
+    });
+    document.getElementById('modal-milestone').addEventListener('click', e => {
+      if (e.target.id === 'modal-milestone') closeMilestoneModal();
+    });
+    document.getElementById('modal-subpath').addEventListener('click', e => {
+      if (e.target.id === 'modal-subpath') closeSubpathModal();
+    });
+  }
+
+  // ─── Boot ────────────────────────────────────────────────
+  function boot() {
+    state = normalizeState(state);
+    lucide.createIcons();
+    wireEvents();
+    updateTabUI();
+    initNetwork();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+  </script>
+</body>
+</html>
