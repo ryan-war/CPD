@@ -17,7 +17,7 @@ import {
   ghostLayout
 } from './layout.js';
 import {
-  initNetwork, applyVisData, refreshGhosts, fitView, focusNode, redraw, savePositionsFromNetwork,
+  initNetwork, applyVisData, fitView, focusNode, redraw, savePositionsFromNetwork,
   setConnectMode, isConnectMode, getSelection, clearSelection, clearTrace,
   setSearchQuery, getSearchQuery, matchesSearch, refreshHighlights,
   selectNodes, zoomBy, drawMinimap, getNetwork, nodeSizeOf, columnLayout, viewCentre
@@ -252,7 +252,7 @@ function closePagePicker() {
   $('btn-page-picker')?.setAttribute('aria-expanded', 'false');
 }
 
-export function isPagePickerOpen() {
+function isPagePickerOpen() {
   return !$('page-picker').classList.contains('hidden');
 }
 
@@ -947,6 +947,10 @@ function wireKeyboard() {
         closeAllModals();
         return;
       }
+      if (isPagePickerOpen()) {
+        closePagePicker();
+        return;
+      }
       if (!$('display-menu').classList.contains('hidden')) {
         $('display-menu').classList.add('hidden');
         $('btn-display').setAttribute('aria-expanded', 'false');
@@ -1199,12 +1203,10 @@ function boot() {
     onAddNodeAt: addNodeAt,
     onFollowLink: node => followNodeLink(node, nav),
     onLayoutModeChange: updateLayoutButtons,
-    onSelectionChange: ids => {
-      highlightTasks(ids);
-      // In "selected" mode the ghosts follow the selection, so a change of
-      // selection changes what the canvas has to draw.
-      if (displayOpts().ghosts === 'selected') refreshGhosts();
-    },
+    onSelectionChange: ids => highlightTasks(ids),
+    // The note explaining what the canvas is or is not ghosting lives in the
+    // summary strip, so it is redrawn whenever the ghosts are.
+    onGhostsChanged: () => renderSummary(),
     onOpenGhost: (pageId, nodeId) => {
       switchView(pageId);
       selectNodes([nodeId], { focus: true });

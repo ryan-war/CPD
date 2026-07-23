@@ -514,6 +514,16 @@ test('ghost ids round-trip and are recognised as synthetic', () => {
   assert.ok(!isSyntheticId('T12'));
 });
 
+test('a ghost id survives whatever a task id happens to contain', () => {
+  // Task ids come from a text field and from imported files, so they are
+  // arbitrary strings. A separator that can appear inside one would truncate
+  // the id and send a click to the wrong task, or to none.
+  for (const nodeId of ['T12', 'Task 1', 'a b c', 'has  two', '', 'x-y_z', '__ghost__']) {
+    const round = parseGhostId(ghostId('sub_7', nodeId));
+    assert.deepEqual(round, { pageId: 'sub_7', nodeId }, JSON.stringify(nodeId));
+  }
+});
+
 test('the ghost display mode is validated on import', () => {
   const base = () => ({ diagrams: { main: { milestones: [] } } });
   assert.equal(normalizeState(base()).nodeDisplay.ghosts, 'off', 'absent defaults off');

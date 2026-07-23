@@ -34,6 +34,7 @@ let traceIds = new Set();
 let ringCache = [];
 let laneCache = [];
 let palette = paletteFor('dark');
+let ghostNote = null;
 
 export function getNetwork() {
   return network;
@@ -63,6 +64,21 @@ export function selectNodes(ids, { focus = false } = {}) {
     });
   }
   refreshHighlights();
+  // vis-network fires no event for a programmatic selection, so nothing else
+  // learns the selection changed. Ghosts that follow it — and the note saying
+  // why none are drawn — would go on describing the previous selection: click
+  // a linked task's card and its sub-path would not appear.
+  syncGhostsToSelection();
+}
+
+/**
+ * Redraw selection-dependent ghosts, wherever the selection came from.
+ * A no-op unless ghosts are actually following the selection.
+ */
+function syncGhostsToSelection() {
+  if ((displayOpts().ghosts || 'off') !== 'selected') return;
+  refreshGhosts();
+  if (handlers.onGhostsChanged) handlers.onGhostsChanged();
 }
 
 export function setSearchQuery(q) {
@@ -446,8 +462,19 @@ export function buildVisData() {
   const ghosts = buildGhosts(nodes);
   visNodes.push(...ghosts.nodes);
   visEdges.push(...ghosts.edges);
+  ghostNote = ghosts.note;
 
-  return { visNodes, visEdges, ghostCount: ghosts.nodes.length, ghostNote: ghosts.note };
+  return { visNodes, visEdges };
+}
+
+/**
+ * Why the canvas is not showing what you asked it to, when that is the case:
+ * the branch limit stopped it, or nothing is selected to show one for. Silently
+ * drawing a subset would be the worst of the options — the diagram would look
+ * complete and be wrong.
+ */
+export function getGhostNote() {
+  return ghostNote;
 }
 
 /**
@@ -648,9 +675,10 @@ export function refreshGhosts() {
   if (staleNodes.length) nodesDS.remove(staleNodes);
   if (staleEdges.length) edgesDS.remove(staleEdges);
 
-  const { nodes, edges } = buildGhosts(allNodes());
+  const { nodes, edges, note } = buildGhosts(allNodes());
   if (nodes.length) nodesDS.add(nodes);
   if (edges.length) edgesDS.add(edges);
+  ghostNote = note;
   drawMinimap();
 }
 
@@ -958,6 +986,7 @@ export function initNetwork(container, callbacks) {
     selectedIds = params.nodes.filter(id => !isSyntheticId(id));
     selectedEdgeId = null;
     handlers.onSelectionChange(selectedIds);
+    syncGhostsToSelection();
     restyleAll();
   });
   network.on('selectEdge', params => {
@@ -970,6 +999,7 @@ export function initNetwork(container, callbacks) {
   network.on('deselectNode', () => {
     selectedIds = [];
     handlers.onSelectionChange([]);
+    syncGhostsToSelection();
     restyleAll();
   });
   network.on('deselectEdge', () => {

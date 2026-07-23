@@ -9,6 +9,8 @@ import { dependenciesOf } from './cpm.js';
 import { linkBadgeHtml } from './links.js';
 import { orderedNodes } from './layout.js';
 import { resourceLoad, levelResources, UNASSIGNED } from './resources.js';
+// network.js does not import this module, so this direction is not a cycle.
+import { getGhostNote } from './network.js';
 import { CRITICAL_COLOR, NEAR_CRITICAL_COLOR, LATE_COLOR, STATUS_COLORS, STATUS_LABELS } from './config.js';
 
 let ganttOpen = false;
@@ -723,7 +725,14 @@ export function renderSummary() {
   const oos = $('sum-out-of-sequence');
   const flagged = usable && dataDate != null ? (outOfSequenceIds || []) : [];
   oos.classList.toggle('hidden', !flagged.length);
-  if (flagged.length) $('sum-out-of-sequence-ids').textContent = flagged.join(', ');
+  if (flagged.length) $('sum-out-of-sequence-ids').textContent = summariseIds(flagged);
+
+  // When the canvas could not draw every ghosted sub-path it was asked for,
+  // say so. A diagram quietly missing branches looks complete and is not.
+  const ghosts = $('sum-ghosts');
+  const note = getGhostNote();
+  ghosts.classList.toggle('hidden', !note);
+  if (note) ghosts.textContent = note;
 }
 
 /**
