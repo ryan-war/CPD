@@ -177,7 +177,7 @@ function tagChipsHtml(node) {
   return tagsOf(node).map(tag => {
     const on = active.has(tag);
     return `<button type="button" class="tag-chip${on ? ' tag-chip-on' : ''}" data-tag="${escapeHtml(tag)}"
-              style="--tag:${tagColor(tag)}" title="Filter the diagram by ${escapeHtml(tag)}">${escapeHtml(tag)}</button>`;
+              aria-pressed="${on}" style="--tag:${tagColor(tag)}" title="Filter the diagram by ${escapeHtml(tag)}">${escapeHtml(tag)}</button>`;
   }).join('');
 }
 

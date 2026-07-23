@@ -13,6 +13,13 @@
 // truncated link is worse than none. The caller warns and points at Save JSON.
 export const MAX_LINK_LENGTH = 16000;
 
+// A shared link is untrusted input: anyone can craft one. Two caps stop a
+// hostile payload from exhausting memory — one on the encoded bytes before we
+// touch them, one on the *decompressed* size, checked as it inflates rather
+// than after, so a small "zip bomb" cannot balloon first and be rejected later.
+const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;   // encoded, ~5.3M chars of base64
+const MAX_INFLATED_BYTES = 12 * 1024 * 1024; // a genuinely large project fits
+
 function bytesToB64url(bytes) {
   let binary = '';
   bytes.forEach(b => { binary += String.fromCharCode(b); });
@@ -35,6 +42,40 @@ async function pipe(stream, bytes) {
   return new Uint8Array(buffer);
 }
 
+/**
+ * Decompress with a running size cap. Reading the stream chunk by chunk means
+ * the limit is enforced *as* it inflates — the decoder is cancelled the moment
+ * the output would exceed the cap, rather than after a bomb has already
+ * expanded in memory.
+ */
+async function inflateCapped(stream, bytes, limit) {
+  const writer = stream.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+
+  const reader = stream.readable.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > limit) {
+      await reader.cancel();
+      throw new Error('shared project is too large');
+    }
+    chunks.push(value);
+  }
+
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
 /** Encode a project to a compact URL-safe payload string. */
 export async function encodeProject(state) {
   const bytes = new TextEncoder().encode(JSON.stringify(state));
@@ -47,11 +88,21 @@ export async function encodeProject(state) {
 
 /** Decode a payload string back into a raw (un-normalised) project object. */
 export async function decodeProject(payload) {
+  if (typeof payload !== 'string' || payload.length > MAX_PAYLOAD_BYTES) {
+    throw new Error('shared project is too large');
+  }
   const flag = payload[0];
   const bytes = b64urlToBytes(payload.slice(1));
-  const raw = flag === 'g'
-    ? await pipe(new DecompressionStream('gzip'), bytes)
-    : bytes;
+  if (bytes.length > MAX_PAYLOAD_BYTES) {
+    throw new Error('shared project is too large');
+  }
+  let raw;
+  if (flag === 'g') {
+    raw = await inflateCapped(new DecompressionStream('gzip'), bytes, MAX_INFLATED_BYTES);
+  } else {
+    if (bytes.length > MAX_INFLATED_BYTES) throw new Error('shared project is too large');
+    raw = bytes;
+  }
   return JSON.parse(new TextDecoder().decode(raw));
 }
 

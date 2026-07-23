@@ -396,8 +396,10 @@ console.log(computeCPM([
 "
 ```
 
-Tailwind, vis-network, and Lucide load from a CDN at pinned versions; if either
-library fails to load the page reports it rather than rendering blank.
+Tailwind, vis-network, and Lucide are vendored in `vendor/` at pinned versions
+and served locally — no CDN, no third-party request, and the app runs offline.
+If a bundle fails to load the page reports it rather than rendering blank. To
+update one, replace the file in `vendor/` and its `<script>` tag in `index.html`.
 
 ## Licence
 

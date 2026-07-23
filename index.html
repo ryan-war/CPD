@@ -5,11 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Critical Path Network</title>
   <meta name="description" content="Browser-based critical path method planner with PERT estimation, working-day calendars, Gantt timeline, and Monte Carlo schedule risk analysis." />
-  <!-- Versions are pinned: floating CDN tags upgrade without warning and can
-       break the deployed page. -->
-  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
-  <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
-  <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+  <!-- Vendored locally rather than loaded from a CDN: no external point of
+       failure, no third-party request, and the app works offline. Versions are
+       pinned in the filenames; update them deliberately, both here and in
+       vendor/. -->
+  <script src="vendor/tailwind-3.4.16.js"></script>
+  <script src="vendor/vis-network-9.1.9.min.js"></script>
+  <script src="vendor/lucide-0.469.0.min.js"></script>
   <link rel="stylesheet" href="css/app.css" />
 </head>
 <body class="h-full antialiased">

@@ -100,6 +100,25 @@ function updateHistoryButtons() {
   $('btn-redo').disabled = !canRedo();
 }
 
+/**
+ * Wipe every transient view state. Called by each path that swaps the whole
+ * project — Load JSON, a shared link, loading a scenario, discarding — so the
+ * incoming plan never inherits the last one's selection, hover trace, tag
+ * filter, search, connect mode, or stale simulation results. (Undo/redo does
+ * not go through here: stepping through history should keep your search and
+ * filter where they were.)
+ */
+function resetViewState() {
+  clearSelection();
+  clearTrace();
+  clearActiveTags();
+  setConnectMode(false);
+  setSearchQuery('');
+  $('node-search').value = '';
+  clearMonteCarloSummary();
+  clearCriticality();
+}
+
 /** A blank canvas gave no indication of what to do next. */
 function updateCanvasEmptyState() {
   $('canvas-empty').classList.toggle('hidden', allNodes().length > 0);
@@ -650,10 +669,12 @@ async function shareLink() {
     }
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(link);
-      toast('Share link copied to clipboard', 'success');
+      // The link carries the whole project, unencrypted — anyone who has it can
+      // read every task, owner, and cost. Say so, since a link feels casual.
+      toast('Link copied — it contains the whole project; share it only with people who may see all its data', 'success');
     } else {
       // No clipboard access (older browser, insecure origin) — hand it over to copy.
-      window.prompt('Copy this share link', link);
+      window.prompt('Copy this link. It contains the whole project — share it only with people who may see all its data.', link);
     }
   } catch (err) {
     toast('Could not create a share link: ' + (err?.message || err), 'error');
@@ -841,10 +862,12 @@ function wireToolbar() {
   });
 
   bindFileInput(() => {
+    resetViewState();
     applyTheme();
     setGanttOpen(isGanttOpen());
     // What is on screen is now the loaded file, not the restored session.
     $('restore-banner').classList.add('hidden');
+    $('shared-banner').classList.add('hidden');
     render({ fit: true });
   });
 }
@@ -1257,11 +1280,9 @@ function discardSavedWork() {
   setState(normalizeState(createDefaultState()));
   seedHistory();
   $('restore-banner').classList.add('hidden');
+  $('shared-banner').classList.add('hidden');
   getState().baseline = null;
-  clearSelection();
-  clearTrace();
-  clearMonteCarloSummary();
-  clearCriticality();
+  resetViewState();
   applyTheme();
   render({ fit: true });
   toast('Started a fresh project', 'success');
@@ -1276,11 +1297,7 @@ function discardSavedWork() {
 function loadScenarioState(newState) {
   setState(normalizeState(newState));
   seedHistory();
-  clearSelection();
-  clearTrace();
-  clearActiveTags();
-  clearMonteCarloSummary();
-  clearCriticality();
+  resetViewState();
   applyTheme();
   render({ fit: true });
 }
@@ -1293,7 +1310,7 @@ async function boot() {
   if (typeof lucide === 'undefined') missing.push('lucide');
   if (missing.length) {
     showLoadError(
-      `Could not load ${missing.join(' and ')}. Check your network connection and reload.`
+      `Could not load the bundled ${missing.join(' and ')} library — check that the vendor/ files are present, then reload.`
     );
     return;
   }
