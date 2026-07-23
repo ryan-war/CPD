@@ -82,6 +82,27 @@ files you keep yourself.
 - **Cycle protection** — circular dependencies are rejected as you draw them,
   and any present in a loaded file are reported by name.
 
+### Schedule health
+
+- **Quality checks** — whether the plan is *sound*, as against whether it
+  computes. The engine will happily schedule a network that is quietly wrong:
+  a task with nothing after it cannot delay anything, so it never appears
+  critical however long it runs — it simply falls out of the answer. A negative
+  lag hides logic nobody wrote down. A hard date constraint overrides the
+  network and takes the float with it. Each of these produces a schedule that
+  is perfectly computed and misleading.
+
+  Fourteen checks cover logic (open starts and ends), relations (leads, lags,
+  how much of the plan is built from overlaps), constraints, float (negative,
+  excessive, and float that cannot be spent without moving a successor),
+  durations (very long tasks, missing estimates), progress reported ahead of
+  the logic, and ownership. Each says what it found, why it matters, and which
+  tasks — click the ids and they are selected on the diagram.
+
+  Checks that cannot run say so rather than passing: with nobody assigned and
+  no reporting date set, silence would read as a clean bill of health for
+  something never examined.
+
 ### Risk analysis
 
 - **Monte Carlo simulation** — samples each task from a triangular O/M/P
@@ -150,6 +171,7 @@ Open the published page, or serve the directory locally (see below).
 | Find a page among many | The **sub-paths** button in the page strip |
 | Assign an owner | **Assigned to** on the task, then **Resources** |
 | Resolve a double-booking | **Resources**, then **Apply** on a levelling option |
+| Check the plan is sound | **Health** |
 | Set a deadline | **Settings** for the project, or **Must finish by** on a task |
 | Hold a task back | **Start no earlier than** on the task |
 | Report progress as of a date | **Reported as of** in **Settings** |
@@ -299,6 +321,7 @@ js/schedule.js           per-render schedule cache, at-risk set, baseline drift,
                          sub-path roll-up figures
 js/resources.js          assignee load, over-allocation, and levelling — pure,
                          no DOM
+js/quality.js            schedule quality checks — pure, no DOM
 js/storage.js            autosave to browser storage
 js/sampling.js           distributions and summary statistics
 js/simulate.js           Monte Carlo driver (worker, with inline fallback)
@@ -314,7 +337,8 @@ js/config.js             constants and theme palettes
 test/cpm.test.js         engine, calendar, and migration tests
 ```
 
-`js/cpm.js`, `js/calendar.js`, `js/layout.js`, and `js/resources.js` have no DOM
+`js/cpm.js`, `js/calendar.js`, `js/layout.js`, `js/resources.js`, and
+`js/quality.js` have no DOM
 dependency and can be imported directly in Node:
 
 ```sh

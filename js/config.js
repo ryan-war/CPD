@@ -45,6 +45,23 @@ export const GHOST_MAX_NODES = 400;
 export const TABS_COMPACT_ABOVE = 12;
 
 /**
+ * Thresholds for the schedule quality checks.
+ *
+ * The day figures come from the assessment planners are audited against, where
+ * they are two working months — long enough that a task exceeding one has
+ * almost certainly not been thought through, rather than being genuinely that
+ * shape. The share figures say how much of a plan may carry a given defect
+ * before it stops being an exception and becomes how the plan is built.
+ */
+export const QUALITY = {
+  highFloatDays: 44,
+  longDurationDays: 44,
+  sharePass: 0.05,
+  shareWarn: 0.10,
+  fsShare: 0.90
+};
+
+/**
  * Status is shown as a fill tint rather than a border colour. The border
  * carries schedule risk — critical, near-critical, selected, search hit — and
  * previously all four meanings competed for that one channel, so a completed

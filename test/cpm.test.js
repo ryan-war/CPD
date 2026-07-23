@@ -17,6 +17,7 @@ import {
   freeSpotNear, ghostLayout
 } from '../js/layout.js';
 import { resourceLoad, assigneeNames, levelResources } from '../js/resources.js';
+import { assessSchedule } from '../js/quality.js';
 import { createDefaultState, normalizeState, captureBaseline } from '../js/state.js';
 import { createCalendar, toISODate, parseISODate } from '../js/calendar.js';
 import { ghostId, parseGhostId, isGhostId, isLaneId, isSyntheticId } from '../js/config.js';
@@ -1150,6 +1151,156 @@ test('levelling gives the tightest task first claim on the person', () => {
   const { delays } = levelOf(nodes, { mode: 'full' });
   assert.equal(delays.get('A'), undefined, 'the critical task stays put');
   assert.equal(delays.get('B'), 5, 'the one with float gives way');
+});
+
+// ─── Schedule quality ──────────────────────────────────────
+//
+// Whether the plan is sound, as against whether it computes. A network can
+// schedule perfectly and still be telling you something untrue.
+
+const assess = (nodes, context) => {
+  const { metrics, cycleIds } = computeCPM(nodes, { mode: 'average' });
+  return assessSchedule(nodes, metrics, { cycleIds, ...context });
+};
+const check = (result, id) => result.checks.find(c => c.id === id);
+
+test('a well-formed chain passes the logic checks', () => {
+  const nodes = [task('A', 2, 2), task('B', 2, 2, ['A']), task('C', 2, 2, ['B'])];
+  const r = assess(nodes);
+  assert.equal(check(r, 'open-starts').severity, 'pass', 'one start is expected');
+  assert.equal(check(r, 'open-ends').severity, 'pass', 'and one finish');
+  assert.equal(check(r, 'leads').severity, 'pass');
+  assert.equal(check(r, 'negative-float').severity, 'pass');
+  assert.equal(r.worst, 'pass');
+});
+
+test('a task with nothing after it is found', () => {
+  // D dangles: nothing depends on it, so however long it runs it can never
+  // appear critical. This is the defect the engine itself cannot surface.
+  const nodes = [
+    task('A', 2, 2), task('B', 2, 2, ['A']), task('C', 2, 2, ['B']), task('D', 50, 50, ['A'])
+  ];
+  const r = assess(nodes);
+  const ends = check(r, 'open-ends');
+  assert.ok(ends.ids.includes('D'), 'D is reported');
+  assert.notEqual(ends.severity, 'pass', 'two loose ends is one too many');
+});
+
+test('unanchored starts are found', () => {
+  const nodes = [task('A', 2, 2), task('B', 2, 2), task('C', 2, 2, ['A', 'B'])];
+  const starts = check(assess(nodes), 'open-starts');
+  assert.deepEqual(starts.ids.sort(), ['A', 'B']);
+  assert.notEqual(starts.severity, 'pass');
+});
+
+test('a lead fails outright, a lag is graded by how much of the plan uses it', () => {
+  const lead = [task('A', 4, 4), task('B', 2, 2, [{ id: 'A', type: 'FS', lag: -2 }])];
+  assert.equal(check(assess(lead), 'leads').severity, 'fail', 'no amount of lead is fine');
+
+  const lag = [task('A', 4, 4), task('B', 2, 2, [{ id: 'A', type: 'FS', lag: 3 }])];
+  const lagCheck = check(assess(lag), 'lags');
+  assert.equal(lagCheck.count, 1);
+  assert.notEqual(lagCheck.severity, 'pass');
+
+  const clean = [task('A', 4, 4), task('B', 2, 2, ['A'])];
+  assert.equal(check(assess(clean), 'lags').severity, 'pass');
+});
+
+test('a plan built mostly from overlaps is flagged', () => {
+  const overlapped = [
+    task('A', 4, 4),
+    task('B', 4, 4, [{ id: 'A', type: 'SS', lag: 0 }]),
+    task('C', 4, 4, [{ id: 'B', type: 'SS', lag: 0 }])
+  ];
+  assert.notEqual(check(assess(overlapped), 'relation-types').severity, 'pass');
+
+  const plain = [task('A', 4, 4), task('B', 4, 4, ['A']), task('C', 4, 4, ['B'])];
+  assert.equal(check(assess(plain), 'relation-types').severity, 'pass');
+});
+
+test('hard constraints and negative float are reported', () => {
+  const nodes = [
+    task('A', 4, 4, [], { mustFinishBy: 2 }),
+    task('B', 2, 2, ['A'], { startNoEarlierThan: 9 })
+  ];
+  const r = assess(nodes);
+  assert.deepEqual(check(r, 'constraints').ids.sort(), ['A', 'B']);
+  assert.equal(check(r, 'negative-float').severity, 'fail', 'A cannot meet its date');
+  assert.ok(check(r, 'negative-float').ids.includes('A'));
+});
+
+test('float nobody can actually spend is called out', () => {
+  // A has six days of total float and none free: moving it a day moves B.
+  const nodes = [
+    task('X', 10, 10), task('A', 2, 2), task('B', 2, 2, ['A']),
+    task('E', 1, 1, ['B', 'X'])
+  ];
+  const borrowed = check(assess(nodes), 'borrowed-float');
+  assert.ok(borrowed.ids.includes('A'));
+  assert.ok(!borrowed.ids.includes('B'), 'B can absorb its own float');
+});
+
+test('very long and zero-length tasks are distinguished', () => {
+  const nodes = [task('A', 60, 60), task('M', 0, 0, ['A']), task('B', 2, 2, ['M'])];
+  const r = assess(nodes);
+  assert.deepEqual(check(r, 'long-durations').ids, ['A']);
+  assert.deepEqual(check(r, 'zero-durations').ids, ['M']);
+});
+
+test('checks that cannot run say so rather than passing', () => {
+  const nodes = [task('A', 2, 2), task('B', 2, 2, ['A'])];
+  const r = assess(nodes);
+  // Nobody is assigned and no reporting date is set: silence here would read as
+  // a clean bill of health for something never examined.
+  assert.equal(check(r, 'ownership').severity, 'n/a');
+  assert.equal(check(r, 'over-allocation').severity, 'n/a');
+  assert.equal(check(r, 'out-of-sequence').severity, 'n/a');
+  assert.ok(r.total < r.checks.length, 'and they are left out of the score');
+});
+
+test('ownership is only checked once somebody owns something', () => {
+  const nodes = [task('A', 2, 2, [], { assignee: 'Ada' }), task('B', 2, 2, ['A'])];
+  const owned = check(assess(nodes), 'ownership');
+  assert.equal(owned.severity, 'fail', 'B has no owner and most of the plan is B');
+  assert.deepEqual(owned.ids, ['B']);
+});
+
+test('progress checks wait for a reporting date', () => {
+  const nodes = [task('A', 2, 2), task('B', 2, 2, ['A'])];
+  assert.equal(check(assess(nodes, { tracking: false }), 'out-of-sequence').severity, 'n/a');
+  assert.equal(
+    check(assess(nodes, { tracking: true, outOfSequenceIds: ['B'] }), 'out-of-sequence').severity,
+    'fail');
+});
+
+test('a cycle stops the assessment rather than reporting nonsense below it', () => {
+  const nodes = [task('A', 2, 2, ['B']), task('B', 2, 2, ['A'])];
+  const r = assess(nodes);
+  assert.equal(r.checks.length, 1, 'nothing else is meaningful');
+  assert.equal(r.checks[0].id, 'cycles');
+  assert.equal(r.worst, 'fail');
+});
+
+test('an empty diagram is assessed as nothing rather than as perfect', () => {
+  const r = assessSchedule([], {}, {});
+  assert.deepEqual(r.checks, []);
+  assert.equal(r.total, 0);
+  assert.equal(r.worst, 'n/a');
+});
+
+test('the shipped default project is assessed without error', () => {
+  const state = normalizeState(createDefaultState());
+  const nodes = nodesOf(state.diagrams.main);
+  const { metrics, cycleIds } = computeCPM(nodes, {
+    mode: 'average', rollup: createRollup(state.diagrams, 'average')
+  });
+  const r = assessSchedule(nodes, metrics, { cycleIds });
+  assert.ok(r.checks.length > 5);
+  assert.ok(r.total > 0 && r.passed <= r.total);
+  for (const c of r.checks) {
+    assert.ok(['pass', 'warn', 'fail', 'n/a'].includes(c.severity), c.id);
+    assert.ok(typeof c.detail === 'string' && c.detail.length > 0, c.id + ' needs a detail');
+  }
 });
 
 // ─── Calendar ──────────────────────────────────────────────

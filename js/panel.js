@@ -9,12 +9,14 @@ import { dependenciesOf } from './cpm.js';
 import { linkBadgeHtml } from './links.js';
 import { orderedNodes } from './layout.js';
 import { resourceLoad, levelResources, UNASSIGNED } from './resources.js';
+import { assessSchedule } from './quality.js';
 // network.js does not import this module, so this direction is not a cycle.
 import { getGhostNote } from './network.js';
 import { CRITICAL_COLOR, NEAR_CRITICAL_COLOR, LATE_COLOR, STATUS_COLORS, STATUS_LABELS } from './config.js';
 
 let ganttOpen = false;
 let resourcesOpen = false;
+let qualityOpen = false;
 let resourceCapacity = 1;
 let highlightedIds = new Set();
 
@@ -650,6 +652,85 @@ function levellingSection(nodes, metrics, projectDuration, calendar, load) {
         so the result is ordinary constraints you can read, edit, or undo.
       </p>
     </div>`;
+}
+
+// ─── Schedule health ───────────────────────────────────────
+
+export function isQualityOpen() {
+  return qualityOpen;
+}
+
+export function setQualityOpen(open) {
+  qualityOpen = open;
+  $('quality-panel').classList.toggle('open', open);
+  const btn = $('btn-quality');
+  btn.classList.toggle('tool-btn-active', open);
+  btn.setAttribute('aria-pressed', String(open));
+  if (open) renderQuality();
+}
+
+/**
+ * What the schedule is doing wrong, as against what it is.
+ *
+ * The findings are lists of task ids, and a list of ids you cannot act on is
+ * just a reproach — so each one selects those tasks on the diagram.
+ */
+export function renderQuality() {
+  const panel = $('quality-panel');
+  const body = $('quality-body');
+  if (!qualityOpen) {
+    panel.classList.remove('open');
+    return;
+  }
+  panel.classList.add('open');
+
+  const {
+    metrics, nodes, graph, dataDate, outOfSequenceIds
+  } = schedule();
+
+  if (!nodes.length) {
+    body.innerHTML = '<p class="text-xs text-muted">Nothing to check on this page yet.</p>';
+    $('quality-score').textContent = '';
+    return;
+  }
+
+  const overAllocated = resourceLoad(nodes, metrics, { capacity: resourceCapacity })
+    .filter(p => p.name !== UNASSIGNED && p.overloadedDays > 0)
+    .map(p => p.name);
+
+  const report = assessSchedule(nodes, metrics, {
+    cycleIds: graph.cycleIds,
+    outOfSequenceIds,
+    overAllocated,
+    tracking: dataDate != null
+  });
+
+  const score = $('quality-score');
+  score.textContent = `${report.passed} of ${report.total} checks passed`;
+  score.className = 'text-[10px] font-medium ' + (
+    report.worst === 'fail' ? 'text-late' : report.worst === 'warn' ? 'text-warning' : 'text-success'
+  );
+
+  // Worst first: the point of the panel is what to look at, not a tidy list.
+  const rank = { fail: 0, warn: 1, pass: 2, 'n/a': 3 };
+  const ordered = [...report.checks].sort((a, b) => rank[a.severity] - rank[b.severity]);
+
+  body.innerHTML = ordered.map(c => `
+    <div class="health-row health-${c.severity.replace('/', '')}">
+      <span class="health-mark" aria-hidden="true">${
+        c.severity === 'pass' ? '✓' : c.severity === 'fail' ? '!' : c.severity === 'warn' ? '·' : '–'
+      }</span>
+      <div class="health-text">
+        <div class="health-title">
+          ${escapeHtml(c.title)}
+          ${c.count ? `<span class="health-count">${c.count}</span>` : ''}
+        </div>
+        <p class="health-detail">${escapeHtml(c.detail)}</p>
+        ${c.ids.length ? `
+          <button type="button" class="health-ids" data-health-ids="${escapeHtml(c.ids.join(','))}"
+                  title="Select these tasks on the diagram">${escapeHtml(summariseIds(c.ids))}</button>` : ''}
+      </div>
+    </div>`).join('');
 }
 
 // ─── Summary and legend ────────────────────────────────────

@@ -60,6 +60,9 @@
           <button type="button" id="btn-resources" data-secondary title="Toggle resource load — who is doing what, and when they are double-booked" aria-pressed="false" class="tool-btn">
             <i data-lucide="users" class="w-3.5 h-3.5" aria-hidden="true"></i> Resources
           </button>
+          <button type="button" id="btn-quality" data-secondary title="Schedule health — whether the plan is sound, not just whether it computes" aria-pressed="false" class="tool-btn">
+            <i data-lucide="stethoscope" class="w-3.5 h-3.5" aria-hidden="true"></i> Health
+          </button>
           <button type="button" id="btn-monte" data-secondary title="Monte Carlo risk simulation" class="tool-btn">
             <i data-lucide="dices" class="w-3.5 h-3.5" aria-hidden="true"></i> Simulate
           </button>
@@ -213,6 +216,16 @@
             </label>
           </div>
           <div id="resource-body"></div>
+        </div>
+
+        <div id="quality-panel" class="mb-4 shrink-0 card p-3">
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <h3 class="text-xs font-semibold flex items-center gap-1.5">
+              <i data-lucide="stethoscope" class="w-3.5 h-3.5" aria-hidden="true"></i> Schedule Health
+            </h3>
+            <span id="quality-score" class="text-[10px] text-muted"></span>
+          </div>
+          <div id="quality-body"></div>
         </div>
 
         <div id="milestones-container" class="space-y-4 flex-1 min-h-0"></div>

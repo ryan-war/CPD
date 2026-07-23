@@ -25,7 +25,8 @@ import {
 import {
   renderBottomPanel, renderGantt, renderSummary, renderLegend, clearMonteCarloSummary,
   isGanttOpen, setGanttOpen, highlightTasks,
-  renderResources, isResourcesOpen, setResourcesOpen, setResourceCapacity, getResourceCapacity
+  renderResources, isResourcesOpen, setResourcesOpen, setResourceCapacity, getResourceCapacity,
+  renderQuality, isQualityOpen, setQualityOpen
 } from './panel.js';
 import { levelResources } from './resources.js';
 import {
@@ -62,6 +63,7 @@ function render({ fit = false } = {}) {
   renderBottomPanel();
   renderGantt();
   renderResources();
+  renderQuality();
   renderLegend();
   updateHistoryButtons();
   updateCanvasEmptyState();
@@ -671,6 +673,16 @@ function wireToolbar() {
   $('btn-redo').addEventListener('click', doRedo);
   $('btn-gantt').addEventListener('click', () => setGanttOpen(!isGanttOpen()));
   $('btn-resources').addEventListener('click', () => setResourcesOpen(!isResourcesOpen()));
+  $('btn-quality').addEventListener('click', () => setQualityOpen(!isQualityOpen()));
+  // A list of ids you cannot act on is just a reproach; clicking a finding
+  // selects the tasks it names so you can go and look at them.
+  $('quality-body').addEventListener('click', event => {
+    const button = event.target.closest('[data-health-ids]');
+    if (!button) return;
+    const ids = button.dataset.healthIds.split(',').filter(Boolean);
+    selectNodes(ids, { focus: ids.length === 1 });
+    highlightTasks(ids);
+  });
   $('resource-capacity').addEventListener('change', event => setResourceCapacity(event.target.value));
   // The panel is rebuilt on every render, so the Apply buttons are reached by
   // delegation rather than rebound each time.
