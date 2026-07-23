@@ -103,7 +103,7 @@ export function exportCSV() {
   const useDates = calendar.enabled;
 
   const header = [
-    'Page', 'Milestone', 'Task ID', 'Title', 'Description', 'Assigned To',
+    'Page', 'Milestone', 'Task ID', 'Title', 'Description', 'Assigned To', 'Tags',
     'Status', 'Progress %',
     'Optimistic', 'Most Likely', 'Pessimistic', 'Duration',
     ...(state.dataDate != null ? ['Remaining'] : []),
@@ -140,6 +140,7 @@ export function exportCSV() {
           node.title,
           node.description || '',
           node.assignee || '',
+          (node.tags || []).join('; '),
           node.status || 'not_started',
           Math.round(node.progress || 0),
           node.min,

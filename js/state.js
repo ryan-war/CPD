@@ -27,6 +27,7 @@ export function createDefaultState() {
     dataDate: null,             // day offset the project is reported as of
     calendar: { ...DEFAULT_CALENDAR },
     baseline: null,             // snapshot for planned-vs-actual comparison
+    scenarios: [],              // saved what-if branches of the whole plan
     nodeDisplay: { ...DEFAULT_DISPLAY },
     pageOrder: ['main', 'sub_1', 'sub_2', 'sub_3'],
     pageTitles: {
@@ -157,6 +158,7 @@ export function normalizeState(data) {
   data.dataDate = dayOrNull(data.dataDate);
   data.calendar = normalizeCalendar(data.calendar);
   if (data.baseline && typeof data.baseline !== 'object') data.baseline = null;
+  data.scenarios = normalizeScenarios(data.scenarios);
   if (!data.pageTitles) data.pageTitles = {};
   if (!Array.isArray(data.pageOrder)) {
     data.pageOrder = ['main', ...Object.keys(data.diagrams).filter(k => k !== 'main').sort()];
@@ -214,6 +216,7 @@ export function normalizeState(data) {
         n.mustFinishBy = dayOrNull(n.mustFinishBy);
         n.startNoEarlierThan = dayOrNull(n.startNoEarlierThan);
         n.assignee = String(n.assignee || '').trim();
+        n.tags = normalizeTags(n.tags);
         if (!n.position || typeof n.position !== 'object') n.position = { x: 0, y: 0 };
         n.position = { x: numberOr(n.position.x, 0), y: numberOr(n.position.y, 0) };
         if (n.linkedSubPage === undefined) n.linkedSubPage = null;
@@ -253,6 +256,43 @@ export function normalizeState(data) {
 function numberOr(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * Tags come from a text field and from hand-edited files, so they arrive as
+ * anything. Keep them as trimmed, de-duplicated, non-empty strings in a stable
+ * order — a tag list is a set, and a file carrying duplicates or blanks would
+ * otherwise draw the same chip twice or an empty one.
+ */
+function normalizeTags(input) {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set();
+  const out = [];
+  input.forEach(raw => {
+    const tag = String(raw ?? '').trim().slice(0, 40);
+    if (!tag || seen.has(tag)) return;
+    seen.add(tag);
+    out.push(tag);
+  });
+  return out;
+}
+
+/**
+ * Saved what-if branches. Each holds a whole snapshot of the plan under a name;
+ * anything without a snapshot object is dropped rather than kept as a row that
+ * cannot be loaded or compared. The snapshot itself is left as it was captured —
+ * it is normalized when loaded, exactly as an imported file is.
+ */
+function normalizeScenarios(input) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .filter(s => s && typeof s === 'object' && s.data && typeof s.data === 'object')
+    .map(s => ({
+      id: String(s.id || uid('scn')),
+      name: String(s.name || 'Untitled scenario').slice(0, 80),
+      capturedAt: s.capturedAt || new Date().toISOString(),
+      data: s.data
+    }));
 }
 
 function normalizeCalendar(input) {

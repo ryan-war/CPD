@@ -20,13 +20,14 @@ import {
   initNetwork, applyVisData, fitView, focusNode, redraw, savePositionsFromNetwork,
   setConnectMode, isConnectMode, getSelection, clearSelection, clearTrace,
   setSearchQuery, getSearchQuery, matchesSearch, refreshHighlights,
-  selectNodes, zoomBy, drawMinimap, getNetwork, nodeSizeOf, columnLayout, viewCentre
+  selectNodes, zoomBy, drawMinimap, getNetwork, nodeSizeOf, columnLayout, viewCentre,
+  toggleActiveTag, clearActiveTags, retainActiveTags
 } from './network.js';
 import {
   renderBottomPanel, renderGantt, renderSummary, renderLegend, clearMonteCarloSummary,
   isGanttOpen, setGanttOpen, highlightTasks,
   renderResources, isResourcesOpen, setResourcesOpen, setResourceCapacity, getResourceCapacity,
-  renderQuality, isQualityOpen, setQualityOpen
+  renderQuality, isQualityOpen, setQualityOpen, renderTagFilter
 } from './panel.js';
 import { levelResources } from './resources.js';
 import {
@@ -37,6 +38,10 @@ import {
   openSettingsModal, closeSettingsModal, saveSettingsForm,
   openMonteModal, closeMonteModal, runSimulation, anyDialogOpen
 } from './modals.js';
+import {
+  initScenarios, openScenariosModal, closeScenariosModal, saveCurrentAsScenario,
+  handleScenarioClick
+} from './scenario-ui.js';
 import { saveJSON, exportPNG, exportCSV, bindFileInput } from './io.js';
 import { initSplitter, initCompactToolbar } from './layout-ui.js';
 import { scheduleSave, saveNow, readSaved, clearSaved, describeAge } from './storage.js';
@@ -53,6 +58,9 @@ let autosaveReady = false;
  */
 function render({ fit = false } = {}) {
   invalidateSchedule();
+  // Keep the tag filter to tags that still exist here before anything styles by
+  // it, so a removed or off-page tag never dims the diagram against nothing.
+  retainActiveTags(new Set(allNodes().flatMap(n => n.tags || [])));
   $('work-area').classList.toggle('swimlane-mode', getState().layoutMode === 'milestone');
   applyVisData();
   renderSummary();
@@ -60,6 +68,7 @@ function render({ fit = false } = {}) {
   // move, so they are rebuilt with everything else rather than only when a
   // page is added or renamed.
   updateTabUI();
+  renderTagFilter();
   renderBottomPanel();
   renderGantt();
   renderResources();
@@ -300,6 +309,9 @@ function switchView(view) {
   state.activeView = view;
   clearSelection();
   clearTrace();
+  // Tags differ from page to page, so a filter set on one page would otherwise
+  // arrive on the next matching nothing and dim the whole diagram.
+  clearActiveTags();
   render({ fit: true });
 }
 
@@ -367,6 +379,7 @@ function newTask(id, x, y) {
     // so a task created here would otherwise reach the saved file missing keys
     // the documented format says it carries.
     assignee: '',
+    tags: [],
     mustFinishBy: null,
     startNoEarlierThan: null,
     dependencies: [],
@@ -605,6 +618,22 @@ function clearSearch() {
   refreshHighlights();
 }
 
+// ─── Tag filter ────────────────────────────────────────────
+//
+// Transient view state, like the search query: it dims what it excludes rather
+// than editing the project, so it takes no history entry and is not saved.
+
+function toggleTagFilter(tag) {
+  if (!tag) return;
+  toggleActiveTag(tag);
+  render();
+}
+
+function clearTagFilter() {
+  clearActiveTags();
+  render();
+}
+
 // ─── Baseline ──────────────────────────────────────────────
 
 function setBaseline() {
@@ -683,6 +712,14 @@ function wireToolbar() {
     selectNodes(ids, { focus: ids.length === 1 });
     highlightTasks(ids);
   });
+  $('tag-filter-bar').addEventListener('click', event => {
+    if (event.target.closest('[data-tag-clear]')) {
+      clearTagFilter();
+      return;
+    }
+    const btn = event.target.closest('[data-tag-filter]');
+    if (btn) toggleTagFilter(btn.dataset.tagFilter);
+  });
   $('resource-capacity').addEventListener('change', event => setResourceCapacity(event.target.value));
   // The panel is rebuilt on every render, so the Apply buttons are reached by
   // delegation rather than rebound each time.
@@ -699,6 +736,16 @@ function wireToolbar() {
   $('btn-add-milestone').addEventListener('click', () => openMilestoneModal(null));
   $('btn-baseline').addEventListener('click', setBaseline);
   $('btn-clear-baseline').addEventListener('click', clearBaseline);
+  $('btn-scenarios').addEventListener('click', openScenariosModal);
+  $('modal-scenarios-close').addEventListener('click', closeScenariosModal);
+  $('modal-scenarios').addEventListener('click', event => {
+    if (event.target.id === 'modal-scenarios') closeScenariosModal();
+  });
+  $('form-scenario').addEventListener('submit', event => {
+    event.preventDefault();
+    saveCurrentAsScenario();
+  });
+  $('scn-list').addEventListener('click', handleScenarioClick);
   $('btn-discard-restore').addEventListener('click', discardSavedWork);
   $('btn-zoom-in').addEventListener('click', () => zoomBy(1.25));
   $('btn-zoom-out').addEventListener('click', () => zoomBy(0.8));
@@ -851,7 +898,7 @@ function wirePanelDelegation() {
   container.addEventListener('click', event => {
     const button = event.target.closest('button');
     if (button) {
-      const { editNode, gotoPage, gotoMain, addToMs, editMs, delMs, moveMs, dir } = button.dataset;
+      const { editNode, gotoPage, gotoMain, addToMs, editMs, delMs, moveMs, dir, tag } = button.dataset;
       if (editNode) openNodeModal(editNode);
       else if (gotoPage) switchView(gotoPage);
       else if (gotoMain) followNodeLink({ linkedMainNode: gotoMain }, nav);
@@ -859,6 +906,8 @@ function wirePanelDelegation() {
       else if (editMs) openMilestoneModal(editMs);
       else if (delMs) deleteMilestone(delMs);
       else if (moveMs) moveMilestone(moveMs, Number(dir));
+      // A tag chip on a card toggles the same filter as the strip above.
+      else if (tag) toggleTagFilter(tag);
       return;
     }
     // Selecting a card selects the task on the diagram.
@@ -1158,6 +1207,24 @@ function discardSavedWork() {
   toast('Started a fresh project', 'success');
 }
 
+/**
+ * Swap the working plan for another whole state — the way a scenario is loaded.
+ * Like importing a file: the new plan becomes the one on screen, history starts
+ * fresh from it, and anything describing the old plan (selection, trace, tag
+ * filter, simulation results) is cleared rather than left contradicting it.
+ */
+function loadScenarioState(newState) {
+  setState(normalizeState(newState));
+  seedHistory();
+  clearSelection();
+  clearTrace();
+  clearActiveTags();
+  clearMonteCarloSummary();
+  clearCriticality();
+  applyTheme();
+  render({ fit: true });
+}
+
 function boot() {
   // Both libraries come from a CDN. Without this check a blocked or failed
   // request leaves a blank page and a console stack trace.
@@ -1194,6 +1261,19 @@ function boot() {
         return wouldCreateCycle(d.id, nodeId, others);
       });
     }
+  });
+
+  initScenarios({
+    // Saving, renaming, or deleting a scenario changes the project but not its
+    // schedule, so it takes a history entry and re-renders — without clearing
+    // the simulation results, which still describe the live plan.
+    onChange: message => {
+      commit();
+      render();
+      if (message) toast(message, 'success');
+    },
+    onReplace: newState => loadScenarioState(newState),
+    refreshIcons: () => refreshIcons($('modal-scenarios'))
   });
 
   wireToolbar();

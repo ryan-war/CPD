@@ -9,6 +9,7 @@ import {
 } from './cpm.js';
 import { WEEKDAY_NAMES, DEFAULT_CALENDAR, createCalendar, toISODate } from './calendar.js';
 import { assigneeNames } from './resources.js';
+import { allTags, parseTags } from './tags.js';
 import {
   getState, currentDiagram, allNodes, findNode, pageTitle, subPageIds, uid
 } from './state.js';
@@ -137,6 +138,9 @@ export function openNodeModal(nodeId) {
   $('edit-assignee').value = node.assignee || '';
   $('assignee-names').innerHTML = assigneeNames(getState().diagrams)
     .map(name => `<option value="${escapeHtml(name)}"></option>`).join('');
+  $('edit-tags').value = (node.tags || []).join(', ');
+  $('tag-names').innerHTML = allTags(getState().diagrams)
+    .map(tag => `<option value="${escapeHtml(tag)}"></option>`).join('');
 
   deadlineField($('edit-due'), $('edit-due-label'), $('edit-due-hint'), node.mustFinishBy, {
     labelText: 'Must finish by',
@@ -241,6 +245,7 @@ export function saveNodeForm(event) {
   node.progress = Math.max(0, Math.min(100, Number($('edit-progress').value) || 0));
   if (node.status === 'done') node.progress = 100;
   node.assignee = $('edit-assignee').value.trim();
+  node.tags = parseTags($('edit-tags').value);
   node.mustFinishBy = readDeadlineField($('edit-due'));
   node.startNoEarlierThan = readDeadlineField($('edit-snet'));
   node.dependencies = dependencies.map(toDependency);
@@ -632,6 +637,6 @@ function renderTornado(sensitivity) {
 }
 
 export function anyDialogOpen() {
-  return ['modal-node', 'modal-edge', 'modal-milestone', 'modal-subpath', 'modal-settings', 'modal-monte']
+  return ['modal-node', 'modal-edge', 'modal-milestone', 'modal-subpath', 'modal-settings', 'modal-monte', 'modal-scenarios']
     .some(isModalOpen);
 }

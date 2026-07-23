@@ -69,6 +69,9 @@
           <button type="button" id="btn-baseline" data-secondary title="Capture the current schedule as the baseline" class="tool-btn">
             <i data-lucide="flag" class="w-3.5 h-3.5" aria-hidden="true"></i> Set Baseline
           </button>
+          <button type="button" id="btn-scenarios" data-secondary title="What-if scenarios — save, compare, and switch between plans" class="tool-btn">
+            <i data-lucide="git-fork" class="w-3.5 h-3.5" aria-hidden="true"></i> Scenarios
+          </button>
           <button type="button" id="btn-settings" data-secondary title="Project settings — calendar, risk threshold, task shape" class="tool-btn">
             <i data-lucide="settings" class="w-3.5 h-3.5" aria-hidden="true"></i> Settings
           </button>
@@ -193,6 +196,8 @@
           </button>
         </div>
 
+        <div id="tag-filter-bar" class="hidden" role="group" aria-label="Filter tasks by tag"></div>
+
         <div id="gantt-panel" class="mb-4 shrink-0 card p-3">
           <div class="flex items-center justify-between mb-2">
             <h3 class="text-xs font-semibold flex items-center gap-1.5">
@@ -259,6 +264,7 @@
     <label class="check-row"><input type="checkbox" data-display="slack" checked /> Slack</label>
     <label class="check-row"><input type="checkbox" data-display="criticality" /> Criticality %</label>
     <label class="check-row"><input type="checkbox" data-display="rollup" /> Sub-path share %</label>
+    <label class="check-row"><input type="checkbox" data-display="tags" /> Tags</label>
     <label class="check-row"><input type="checkbox" data-display="link" checked /> Link marker</label>
     <label class="check-row"><input type="checkbox" data-display="progress" checked /> Progress %</label>
 
@@ -332,6 +338,15 @@
             <input id="edit-assignee" type="text" list="assignee-names" placeholder="Nobody" />
             <datalist id="assignee-names"></datalist>
           </div>
+          <div>
+            <label for="edit-tags">Tags</label>
+            <input id="edit-tags" type="text" list="tag-names" placeholder="e.g. QA, client-facing" />
+            <datalist id="tag-names"></datalist>
+            <p class="hint">Comma-separated. Cut across milestones — filter the diagram by them below.</p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
           <div>
             <label id="edit-due-label" for="edit-due">Must finish by</label>
             <input id="edit-due" type="number" min="0" step="0.5" placeholder="No deadline" />
@@ -557,6 +572,34 @@
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scenarios -->
+  <div id="modal-scenarios" class="hidden modal" role="dialog" aria-modal="true" aria-labelledby="modal-scenarios-heading">
+    <div class="modal-card max-w-2xl">
+      <div class="modal-head">
+        <h3 id="modal-scenarios-heading">What-If Scenarios</h3>
+        <button type="button" id="modal-scenarios-close" class="icon-btn" aria-label="Close"><i data-lucide="x" class="w-4 h-4" aria-hidden="true"></i></button>
+      </div>
+      <div class="p-4 space-y-3">
+        <p class="text-xs text-muted">
+          Save the plan as it stands, change estimates or dependencies, then
+          compare — a scenario is a whole copy of the project you can switch to
+          or measure the current plan against.
+        </p>
+        <p class="text-xs">Current plan finishes in <span id="scn-current-dur" class="value">—</span>.</p>
+
+        <form id="form-scenario" class="flex items-center gap-2">
+          <input id="scn-new-name" type="text" placeholder="Name this scenario (optional)" class="flex-1" aria-label="Scenario name" data-autofocus />
+          <button type="submit" class="btn-primary shrink-0">
+            <i data-lucide="save" class="w-3.5 h-3.5" aria-hidden="true"></i> Save current
+          </button>
+        </form>
+
+        <div id="scn-list" class="scenario-list"></div>
+        <div id="scn-compare" class="hidden scenario-compare"></div>
       </div>
     </div>
   </div>

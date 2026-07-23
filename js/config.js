@@ -10,6 +10,26 @@ export const SELECTED_COLOR = '#22d3ee';
 
 export const LANE_COLORS = ['#1e3a5f', '#1a3d32', '#3d2a1a', '#3d1a2e', '#2a1a3d', '#1a353d'];
 export const LANE_COLORS_LIGHT = ['#dbeafe', '#d1fae5', '#fef3c7', '#fce7f3', '#ede9fe', '#cffafe'];
+
+/**
+ * Tags are free-form labels that cut across milestones and owners — "QA",
+ * "client-facing", "needs-review". Their colour is derived from the text so the
+ * same tag reads the same everywhere without anyone having to assign one, and a
+ * tag renamed becomes a different colour rather than inheriting a stale slot.
+ */
+export const TAG_COLORS = [
+  '#38bdf8', '#22c55e', '#f59e0b', '#e879f9', '#a78bfa',
+  '#f472b6', '#2dd4bf', '#fb7185', '#84cc16', '#60a5fa'
+];
+
+export function tagColor(name) {
+  const text = String(name || '');
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    hash = (hash * 31 + text.charCodeAt(i)) | 0;
+  }
+  return TAG_COLORS[Math.abs(hash) % TAG_COLORS.length];
+}
 /**
  * Layout spacing. These are minimums and gutters, not fixed pitches: the
  * layout code sizes each column and row from the tasks actually in it, so a
@@ -129,6 +149,7 @@ export const DEFAULT_DISPLAY = {
   dates: false,
   criticality: false,
   rollup: false,
+  tags: false,
   ghosts: 'off'   // 'off' | 'selected' | 'all' — see GHOST_MODES
 };
 

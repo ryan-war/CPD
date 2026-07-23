@@ -11,8 +11,9 @@ import { orderedNodes } from './layout.js';
 import { resourceLoad, levelResources, UNASSIGNED } from './resources.js';
 import { assessSchedule } from './quality.js';
 // network.js does not import this module, so this direction is not a cycle.
-import { getGhostNote } from './network.js';
-import { CRITICAL_COLOR, NEAR_CRITICAL_COLOR, LATE_COLOR, STATUS_COLORS, STATUS_LABELS } from './config.js';
+import { getGhostNote, getActiveTags, clearActiveTags } from './network.js';
+import { tagsOf, tagCounts, matchesTags } from './tags.js';
+import { CRITICAL_COLOR, NEAR_CRITICAL_COLOR, LATE_COLOR, STATUS_COLORS, STATUS_LABELS, tagColor } from './config.js';
 
 let ganttOpen = false;
 let resourcesOpen = false;
@@ -165,6 +166,20 @@ function assigneeChipHtml(node) {
 }
 
 /**
+ * A task's tags as colour-coded chips. The active filter is reflected here too:
+ * a chip on the filter reads as pressed, so the card shows which of its labels
+ * is doing the filtering.
+ */
+function tagChipsHtml(node) {
+  const active = getActiveTags();
+  return tagsOf(node).map(tag => {
+    const on = active.has(tag);
+    return `<button type="button" class="tag-chip${on ? ' tag-chip-on' : ''}" data-tag="${escapeHtml(tag)}"
+              style="--tag:${tagColor(tag)}" title="Filter the diagram by ${escapeHtml(tag)}">${escapeHtml(tag)}</button>`;
+  }).join('');
+}
+
+/**
  * On a sub-path page, "critical" on its own means critical *here*. It only
  * matters to the delivery date if the branch above it is critical too, and the
  * diagram would otherwise colour both the same red.
@@ -192,6 +207,9 @@ function taskCardHtml(node, ctx) {
     : `${escapeHtml(d.id)}<span class="rel-tag">${escapeHtml(d.type)}${d.lag ? (d.lag > 0 ? '+' : '') + d.lag : ''}</span>`;
 
   const edgeClass = isLate ? 'card-late' : isCrit ? 'card-critical' : isNear ? 'card-near-critical' : '';
+  // A card the tag filter excludes is dimmed rather than hidden, so the columns
+  // and rows do not reshuffle every time a filter is toggled.
+  const dimClass = matchesTags(node, getActiveTags()) ? '' : ' task-card-dim';
   const progress = Math.max(0, Math.min(100, Number(node.progress) || 0));
   // A task standing in for a sub-page does not own its own completion any
   // more — the sub-page's tasks decide it — so the slider goes away rather
@@ -200,7 +218,7 @@ function taskCardHtml(node, ctx) {
   const rolledProgress = rollup && rollup.progress != null;
 
   return `
-    <article data-task-card="${escapeHtml(node.id)}" class="task-card ${edgeClass}">
+    <article data-task-card="${escapeHtml(node.id)}" class="task-card ${edgeClass}${dimClass}">
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
           <div class="flex items-center gap-2 flex-wrap">
@@ -211,6 +229,7 @@ function taskCardHtml(node, ctx) {
             ${driftChip(taskDrift)}
             ${projectCriticalChipHtml(node)}
             ${linkBadgeHtml(node)}
+            ${tagChipsHtml(node)}
           </div>
           <p class="text-xs text-muted mt-1 line-clamp-2">${escapeHtml(node.description || 'No description')}</p>
         </div>
@@ -417,6 +436,44 @@ function renderBaselineBanner(drift) {
     `Baseline captured ${new Date(drift.capturedAt).toLocaleString()} — ${verdict}.`;
   banner.classList.toggle('baseline-late', delta > 0);
   banner.classList.toggle('baseline-early', delta < 0);
+}
+
+/**
+ * The tag filter strip. One toggle per tag on the current page, coloured to
+ * match its chips, showing how many tasks carry it. Selecting tags dims
+ * everything without them, on the canvas and on the cards at once, so "show me
+ * the QA work" is one click rather than a scroll and a squint. Hidden entirely
+ * when the page has no tags, so it costs nothing until tags are used.
+ */
+export function renderTagFilter() {
+  const bar = $('tag-filter-bar');
+  if (!bar) return;
+  const { nodes } = schedule();
+  const counts = tagCounts(nodes);
+  const active = getActiveTags();
+
+  if (!counts.length) {
+    bar.classList.add('hidden');
+    bar.innerHTML = '';
+    // A filter left active from another page would silently hide tasks here.
+    if (active.size) clearActiveTags();
+    return;
+  }
+
+  bar.classList.remove('hidden');
+  const chips = counts.map(({ tag, count }) => {
+    const on = active.has(tag);
+    return `<button type="button" class="tag-toggle${on ? ' tag-toggle-on' : ''}" data-tag-filter="${escapeHtml(tag)}"
+              style="--tag:${tagColor(tag)}" aria-pressed="${on}" title="${count} task${count === 1 ? '' : 's'}">
+              ${escapeHtml(tag)}<span class="tag-toggle-count">${count}</span>
+            </button>`;
+  }).join('');
+
+  bar.innerHTML = `
+    <span class="tag-filter-label"><i data-lucide="tag" class="w-3 h-3" aria-hidden="true"></i>Filter by tag</span>
+    ${chips}
+    ${active.size ? '<button type="button" class="tag-filter-clear" data-tag-clear>Clear</button>' : ''}`;
+  refreshIcons(bar);
 }
 
 // ─── Gantt ─────────────────────────────────────────────────

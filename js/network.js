@@ -13,6 +13,7 @@ import {
   schedule, fmt, fmtPercent, getCriticality, rollupForNode, isProjectCritical
 } from './schedule.js';
 import { getState, currentDiagram, allNodes, findNode, displayOpts, pageTitle } from './state.js';
+import { tagsOf, matchesTags } from './tags.js';
 import { linkTooltip } from './links.js';
 import { columnGeometry, ghostLayout } from './layout.js';
 
@@ -28,6 +29,9 @@ let selectedIds = [];
 let selectedEdgeId = null;
 let searchQuery = '';
 let traceIds = new Set();
+// Tags currently filtered on. Transient view state, like the search query and
+// the hover trace — it dims what it excludes rather than changing the project.
+let activeTags = new Set();
 
 // Snapshots used by the per-frame draw callbacks. Rebuilt on sync rather than
 // read out of state on every animation frame.
@@ -94,7 +98,41 @@ export function matchesSearch(node) {
   const q = searchQuery.toLowerCase();
   return String(node.id).toLowerCase().includes(q) ||
     (node.title || '').toLowerCase().includes(q) ||
-    (node.description || '').toLowerCase().includes(q);
+    (node.description || '').toLowerCase().includes(q) ||
+    tagsOf(node).some(tag => tag.toLowerCase().includes(q));
+}
+
+// ─── Tag filter ────────────────────────────────────────────
+
+export function getActiveTags() {
+  return activeTags;
+}
+
+/** Flip one tag on or off. Returns the resulting set for the caller to act on. */
+export function toggleActiveTag(tag) {
+  if (activeTags.has(tag)) activeTags.delete(tag);
+  else activeTags.add(tag);
+  return activeTags;
+}
+
+export function clearActiveTags() {
+  activeTags = new Set();
+}
+
+/**
+ * Drop any filtered tag no longer present on the page. Called before styling on
+ * every render, so deleting the last task with a tag — or switching to a page
+ * that never had it — cannot leave the canvas dimmed against a tag that is gone.
+ */
+export function retainActiveTags(available) {
+  activeTags.forEach(tag => {
+    if (!available.has(tag)) activeTags.delete(tag);
+  });
+}
+
+/** True when the task should read as filtered out — some filter is on and it has none of it. */
+function filteredByTags(node) {
+  return activeTags.size > 0 && !matchesTags(node, activeTags);
 }
 
 // ─── Labels ────────────────────────────────────────────────
@@ -137,6 +175,11 @@ function buildNodeLabel(node, metric, state, calendar) {
     if (entry) lines.push(`Sub:${fmtPercent(entry.share)}`);
   }
 
+  if (d.tags) {
+    const tags = tagsOf(node);
+    if (tags.length) lines.push('🏷 ' + tags.join(' '));
+  }
+
   return lines.join('\n') || node.id;
 }
 
@@ -173,7 +216,7 @@ const center = pad;
 
 function nodeFontSize() {
   const d = displayOpts();
-  const count = ['title', 'minMax', 'esEf', 'lsLf', 'slack', 'progress', 'dates', 'criticality', 'rollup']
+  const count = ['title', 'minMax', 'esEf', 'lsLf', 'slack', 'progress', 'dates', 'criticality', 'rollup', 'tags']
     .filter(k => d[k]).length;
   if (count >= 5) return 9;
   if (count >= 4) return 10;
@@ -272,7 +315,8 @@ function hexToRgb(hex) {
 function nodeStyle(node, isCritical, isNearCritical, isLate = false) {
   const tracing = traceIds.size > 0;
   const inTrace = tracing && traceIds.has(node.id);
-  const dimmed = tracing && !inTrace;
+  // Dimmed by a hover trace it is outside, or by a tag filter it does not match.
+  const dimmed = (tracing && !inTrace) || filteredByTags(node);
   const flags = {
     inTrace,
     isLate,
@@ -395,6 +439,7 @@ export function buildVisData() {
         linkTooltip(node).trim(),
         `Status: ${node.status || 'not_started'} · ${Math.round(node.progress || 0)}%`,
         node.assignee ? `Assigned to: ${node.assignee}` : '',
+        tagsOf(node).length ? `Tags: ${tagsOf(node).join(', ')}` : '',
         `Milestone: ${found?.milestone.title || '—'}`,
         `Duration used: ${fmt(metric.duration)}d`,
         node.mustFinishBy != null
