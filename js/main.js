@@ -4,18 +4,20 @@ import { $, escapeHtml, toast, refreshIcons, closeAllModals } from './dom.js';
 import {
   getState, setState, createDefaultState, normalizeState, seedHistory, commit,
   undo, redo, canUndo, canRedo, currentDiagram, allNodes, findNode, pageTitle,
-  nextNodeId, uid, displayOpts, captureBaseline
+  nextNodeId, uid, displayOpts, captureBaseline, subPageIds
 } from './state.js';
+import { TABS_COMPACT_ABOVE, GHOST_ROW_GAP } from './config.js';
 import {
   schedule, invalidateSchedule, clearCriticality, rollupForPage, fmtPercent
 } from './schedule.js';
 import { dependenciesOf, wouldCreateCycle, toDependency } from './cpm.js';
 import { followNodeLink, groupPagesByMainNode } from './links.js';
 import {
-  computeCpmLayout, orderedNodes, columnRowHeight, columnRowOrigin, freeSpotNear
+  computeCpmLayout, orderedNodes, columnRowHeight, columnRowOrigin, freeSpotNear,
+  ghostLayout
 } from './layout.js';
 import {
-  initNetwork, applyVisData, fitView, focusNode, redraw, savePositionsFromNetwork,
+  initNetwork, applyVisData, refreshGhosts, fitView, focusNode, redraw, savePositionsFromNetwork,
   setConnectMode, isConnectMode, getSelection, clearSelection, clearTrace,
   setSearchQuery, getSearchQuery, matchesSearch, refreshHighlights,
   selectNodes, zoomBy, drawMinimap, getNetwork, nodeSizeOf, columnLayout, viewCentre
@@ -119,18 +121,40 @@ function rollupTabTitle(id, rollup) {
  * The page strip, with sub-paths gathered under the Main task each belongs to.
  * A flat row of "Sub-Path 1 … 7" told you nothing about what any of them was
  * part of; the parent chip does, and doubles as a jump back to that task.
+ *
+ * Past a dozen or so the strip stops being navigation and becomes a wall — at a
+ * hundred sub-paths it wrapped to nineteen rows and took over half the window,
+ * pushing the canvas off the bottom. Above the threshold it collapses to Main,
+ * wherever you are now, and a searchable picker for the rest.
  */
 function updateTabUI() {
   const state = getState();
   const tabs = $('page-tabs');
   const groups = groupPagesByMainNode();
+  const subCount = subPageIds().length;
+  const compact = subCount > TABS_COMPACT_ABOVE;
 
-  tabs.innerHTML = tabButtonHtml('main', state.activeView) + groups.map(group => {
-    const chip = group.mainNodeId
-      ? `<button type="button" class="tab-parent" data-parent-node="${escapeHtml(group.mainNodeId)}" title="${escapeHtml(`${group.mainNodeId} — ${group.mainTitle}`)}">${escapeHtml(group.mainNodeId)}<span aria-hidden="true">▸</span></button>`
-      : '<span class="tab-parent tab-parent-none" title="Not linked from any Main task">⌁</span>';
-    return `<span class="tab-group">${chip}${group.pages.map(id => tabButtonHtml(id, state.activeView)).join('')}</span>`;
-  }).join('');
+  if (compact) {
+    const here = state.activeView !== 'main' ? tabButtonHtml(state.activeView, state.activeView) : '';
+    tabs.innerHTML = tabButtonHtml('main', state.activeView) + here +
+      `<button type="button" id="btn-page-picker" class="tab-picker"
+               aria-haspopup="true" aria-expanded="false" aria-controls="page-picker"
+               title="Find and open a sub-path">
+         <i data-lucide="search" class="w-3 h-3" aria-hidden="true"></i>
+         ${subCount} sub-paths
+       </button>`;
+    $('btn-page-picker').addEventListener('click', event => {
+      event.stopPropagation();
+      togglePagePicker();
+    });
+  } else {
+    tabs.innerHTML = tabButtonHtml('main', state.activeView) + groups.map(group => {
+      const chip = group.mainNodeId
+        ? `<button type="button" class="tab-parent" data-parent-node="${escapeHtml(group.mainNodeId)}" title="${escapeHtml(`${group.mainNodeId} — ${group.mainTitle}`)}">${escapeHtml(group.mainNodeId)}<span aria-hidden="true">▸</span></button>`
+        : '<span class="tab-parent tab-parent-none" title="Not linked from any Main task">⌁</span>';
+      return `<span class="tab-group">${chip}${group.pages.map(id => tabButtonHtml(id, state.activeView)).join('')}</span>`;
+    }).join('');
+  }
 
   tabs.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
@@ -143,6 +167,7 @@ function updateTabUI() {
     btn.addEventListener('click', () =>
       followNodeLink({ linkedMainNode: btn.dataset.parentNode }, nav));
   });
+  if (!compact) closePagePicker();
 
   updateViewLabel();
   $('project-title').textContent = state.projectTitle;
@@ -150,6 +175,108 @@ function updateTabUI() {
   updatePertButton();
   syncDisplayMenu();
   refreshIcons(tabs);
+}
+
+// ─── Page picker ───────────────────────────────────────────
+//
+// The searchable stand-in for the tab strip once there are too many pages to
+// show at once. Filters on the page title, on the Main task it hangs from, and
+// on that task's title, because at a hundred sub-paths "Sub-Path 73" is not
+// what anyone remembers — "the one under T73, the survey" is.
+
+function pagePickerRows(filter) {
+  const state = getState();
+  const needle = filter.trim().toLowerCase();
+  const rows = [];
+
+  groupPagesByMainNode().forEach(group => {
+    group.pages.forEach(id => {
+      const rollup = rollupForPage(id);
+      const parent = group.mainNodeId || '';
+      const haystack = `${pageTitle(id)} ${parent} ${group.mainTitle || ''}`.toLowerCase();
+      if (needle && !haystack.includes(needle)) return;
+      rows.push({ id, parent, parentTitle: group.mainTitle || '', rollup });
+    });
+  });
+
+  return rows;
+}
+
+function renderPagePicker(filter = '') {
+  const list = $('page-picker-list');
+  const rows = pagePickerRows(filter);
+  const active = getState().activeView;
+
+  if (!rows.length) {
+    list.innerHTML = '<p class="hint px-2 py-3">No sub-path matches that.</p>';
+    return;
+  }
+
+  list.innerHTML = rows.map(row => `
+    <button type="button" class="picker-row${row.id === active ? ' picker-row-active' : ''}"
+            data-picker-view="${escapeHtml(row.id)}">
+      <span class="picker-title">${escapeHtml(pageTitle(row.id))}</span>
+      ${row.parent
+        ? `<span class="picker-parent" title="${escapeHtml(`${row.parent} — ${row.parentTitle}`)}">${escapeHtml(row.parent)}</span>`
+        : '<span class="picker-parent picker-parent-none" title="Not linked from any Main task">⌁</span>'}
+      ${row.rollup && row.rollup.share > 0
+        ? `<span class="picker-share">${fmtPercent(row.rollup.share)}</span>`
+        : '<span class="picker-share"></span>'}
+    </button>`).join('');
+}
+
+function togglePagePicker() {
+  const menu = $('page-picker');
+  if (!menu.classList.contains('hidden')) {
+    closePagePicker();
+    return;
+  }
+  renderPagePicker('');
+  menu.classList.remove('hidden');
+  $('btn-page-picker')?.setAttribute('aria-expanded', 'true');
+
+  const anchor = $('btn-page-picker').getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(anchor.left, window.innerWidth - menu.offsetWidth - 8))}px`;
+  menu.style.top = `${anchor.bottom + 4}px`;
+
+  const search = $('page-picker-search');
+  search.value = '';
+  search.focus();
+  refreshIcons(menu);
+}
+
+function closePagePicker() {
+  const menu = $('page-picker');
+  if (!menu || menu.classList.contains('hidden')) return;
+  menu.classList.add('hidden');
+  $('btn-page-picker')?.setAttribute('aria-expanded', 'false');
+}
+
+export function isPagePickerOpen() {
+  return !$('page-picker').classList.contains('hidden');
+}
+
+function wirePagePicker() {
+  const menu = $('page-picker');
+  menu.addEventListener('click', event => {
+    event.stopPropagation();
+    const row = event.target.closest('[data-picker-view]');
+    if (!row) return;
+    closePagePicker();
+    switchView(row.dataset.pickerView);
+  });
+  $('page-picker-search').addEventListener('input', event =>
+    renderPagePicker(event.target.value));
+  // Enter opens the only thing left, which is what filtering down to one is for.
+  $('page-picker-search').addEventListener('keydown', event => {
+    if (event.key !== 'Enter') return;
+    const first = menu.querySelector('[data-picker-view]');
+    if (!first) return;
+    event.preventDefault();
+    closePagePicker();
+    switchView(first.dataset.pickerView);
+  });
+  document.addEventListener('click', () => closePagePicker());
 }
 
 /** Which page you are on, and — for a sub-path — what it is worth. */
@@ -196,6 +323,10 @@ function syncDisplayMenu() {
   document.querySelectorAll('#display-menu [data-display]').forEach(cb => {
     const key = cb.dataset.display;
     cb.checked = key === 'id' ? true : !!d[key];
+  });
+  const ghosts = d.ghosts || 'off';
+  document.querySelectorAll('#display-menu [data-ghosts]').forEach(radio => {
+    radio.checked = radio.dataset.ghosts === ghosts;
   });
 }
 
@@ -369,6 +500,40 @@ function setStatusForSelection(status) {
 
 // ─── Layouts ───────────────────────────────────────────────
 
+/**
+ * Node dimensions for layout, with room left for whatever hangs below.
+ *
+ * The layouts space rows by how tall the tasks in them actually are. A ghosted
+ * sub-path is drawn below its parent but is not a task, so without this the
+ * next row lands straight on top of it and the branch is lost behind the
+ * diagram it belongs to. Claiming the height up front is what gives it room.
+ */
+function ghostAwareSize(nodes) {
+  const state = getState();
+  const mode = displayOpts().ghosts || 'off';
+  // Only "all" reserves room. Under "selected" the branch is transient and one
+  // at a time, and permanently spreading the diagram out for it would cost more
+  // than it gives.
+  if (mode !== 'all' || state.activeView !== 'main') return nodeSizeOf;
+
+  const depths = new Map();
+  nodes.forEach(n => {
+    const page = n.linkedSubPage && state.diagrams[n.linkedSubPage];
+    if (!page) return;
+    const sub = allNodes(page);
+    if (!sub.length) return;
+    depths.set(n.id, ghostLayout(sub, { x: 0, y: 0 }).depth);
+  });
+  if (!depths.size) return nodeSizeOf;
+
+  return id => {
+    const size = nodeSizeOf(id);
+    const depth = depths.get(id) || 0;
+    if (!size || !depth) return size;
+    return { width: size.width, height: size.height + depth + GHOST_ROW_GAP };
+  };
+}
+
 function applyAutoLayout() {
   const nodes = allNodes();
   if (!nodes.length) {
@@ -377,7 +542,7 @@ function applyAutoLayout() {
   }
 
   getState().layoutMode = 'cpm';
-  const { positions } = computeCpmLayout(nodes, schedule(), { sizeOf: nodeSizeOf });
+  const { positions } = computeCpmLayout(nodes, schedule(), { sizeOf: ghostAwareSize(nodes) });
   nodes.forEach(n => {
     if (positions[n.id]) n.position = positions[n.id];
   });
@@ -601,6 +766,13 @@ function wireDisplayMenu() {
   });
   menu.addEventListener('click', event => event.stopPropagation());
   menu.addEventListener('change', event => {
+    const ghost = event.target.closest('[data-ghosts]');
+    if (ghost) {
+      getState().nodeDisplay.ghosts = ghost.dataset.ghosts;
+      commit();
+      render();
+      return;
+    }
     const cb = event.target.closest('[data-display]');
     if (!cb || cb.dataset.display === 'id') return;
     getState().nodeDisplay[cb.dataset.display] = cb.checked;
@@ -1010,6 +1182,7 @@ function boot() {
 
   wireToolbar();
   wireDisplayMenu();
+  wirePagePicker();
   wireModals();
   wirePanelDelegation();
   wireKeyboard();
@@ -1026,7 +1199,17 @@ function boot() {
     onAddNodeAt: addNodeAt,
     onFollowLink: node => followNodeLink(node, nav),
     onLayoutModeChange: updateLayoutButtons,
-    onSelectionChange: ids => highlightTasks(ids),
+    onSelectionChange: ids => {
+      highlightTasks(ids);
+      // In "selected" mode the ghosts follow the selection, so a change of
+      // selection changes what the canvas has to draw.
+      if (displayOpts().ghosts === 'selected') refreshGhosts();
+    },
+    onOpenGhost: (pageId, nodeId) => {
+      switchView(pageId);
+      selectNodes([nodeId], { focus: true });
+      highlightTasks([nodeId]);
+    },
     onPositionsChanged: () => {
       commit();
       updateHistoryButtons();

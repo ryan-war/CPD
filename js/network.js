@@ -2,17 +2,19 @@
 
 import {
   CRITICAL_COLOR, NEAR_CRITICAL_COLOR, LATE_COLOR, TRACE_COLOR, SEARCH_COLOR, SELECTED_COLOR,
-  LANE_ID_PREFIX, STATUS_COLORS, MINIMAP_WIDTH, MINIMAP_HEIGHT,
-  isLaneId, paletteFor
+  LANE_ID_PREFIX, GHOST_ID_PREFIX, STATUS_COLORS, MINIMAP_WIDTH, MINIMAP_HEIGHT, GHOST_MAX_NODES,
+  isLaneId, isGhostId, isSyntheticId, ghostId, parseGhostId, paletteFor
 } from './config.js';
 import { $, toast } from './dom.js';
-import { traceFrom, wouldCreateCycle, dependenciesOf, isDrivingLink } from './cpm.js';
+import {
+  traceFrom, wouldCreateCycle, dependenciesOf, isDrivingLink, nodesOf, computeCPM
+} from './cpm.js';
 import {
   schedule, fmt, fmtPercent, getCriticality, rollupForNode, isProjectCritical
 } from './schedule.js';
-import { getState, currentDiagram, allNodes, findNode, displayOpts } from './state.js';
+import { getState, currentDiagram, allNodes, findNode, displayOpts, pageTitle } from './state.js';
 import { linkTooltip } from './links.js';
-import { columnGeometry } from './layout.js';
+import { columnGeometry, ghostLayout } from './layout.js';
 
 let network = null;
 let nodesDS = null;
@@ -441,7 +443,159 @@ export function buildVisData() {
       ...edgeStyle(link, metrics, criticalIds)
     }));
 
-  return { visNodes, visEdges };
+  const ghosts = buildGhosts(nodes);
+  visNodes.push(...ghosts.nodes);
+  visEdges.push(...ghosts.edges);
+
+  return { visNodes, visEdges, ghostCount: ghosts.nodes.length, ghostNote: ghosts.note };
+}
+
+/**
+ * Linked sub-paths drawn in place, hanging below the Main task that stands for
+ * each one.
+ *
+ * A linked task previously showed a marker and a share, and told you nothing
+ * about the shape of the work behind it — you had to leave the page to see it,
+ * and then you could no longer see where it sat. These are that work, in
+ * context, drawn faintly enough to stay background.
+ *
+ * They are decoration, not project data: the sub-page owns them, they take no
+ * part in this page's schedule, and every interaction handler refuses them.
+ * The only thing a ghost does is take you to its page.
+ */
+function buildGhosts(mainNodes) {
+  const state = getState();
+  const mode = displayOpts().ghosts || 'off';
+  const empty = { nodes: [], edges: [], note: null };
+  // Only Main links sub-paths, and only its own tasks can stand for one.
+  if (mode === 'off' || state.activeView !== 'main') return empty;
+
+  const wanted = mainNodes.filter(n => {
+    if (!n.linkedSubPage || !state.diagrams[n.linkedSubPage]) return false;
+    return mode === 'all' || selectedIds.includes(n.id);
+  });
+  if (!wanted.length) {
+    return mode === 'selected'
+      ? { ...empty, note: 'Select a linked task to see its sub-path here' }
+      : empty;
+  }
+
+  const nodes = [];
+  const edges = [];
+  let note = null;
+
+  for (const parent of wanted) {
+    const pageId = parent.linkedSubPage;
+    const subNodes = nodesOf(state.diagrams[pageId]);
+    if (!subNodes.length) continue;
+
+    // Drawing every branch at once stops being a diagram somewhere past a few
+    // hundred nodes. Rather than freeze, stop and say where it stopped.
+    if (nodes.length + subNodes.length > GHOST_MAX_NODES) {
+      note = `Showing ${nodes.length} of the linked tasks — switch to "selected" for the rest`;
+      break;
+    }
+
+    // The sub-page's own schedule, for colouring. Roll-up is deliberately not
+    // threaded through: a ghost shows that page as that page reads it.
+    const { metrics: subMetrics, criticalIds: subCritical, graph } =
+      computeCPM(subNodes, { mode: state.estimationMode });
+
+    const { positions } = ghostLayout(subNodes, parent.position || { x: 0, y: 0 }, {
+      metrics: subMetrics, graph
+    });
+
+    subNodes.forEach(sub => {
+      const at = positions[sub.id] || { x: 0, y: 0 };
+      const m = subMetrics[sub.id] || {};
+      nodes.push({
+        id: ghostId(pageId, sub.id),
+        label: `${sub.id}\n${fmt(m.duration)}d`,
+        x: at.x,
+        y: at.y,
+        fixed: true,
+        physics: false,
+        chosen: false,
+        shape: 'circle',
+        size: 22,
+        ...ghostStyle(subCritical.has(sub.id)),
+        title: [
+          `${sub.id} — ${sub.title}`,
+          `On ${pageTitle(pageId)}, under ${parent.id}`,
+          `${fmt(m.ES)} → ${fmt(m.EF)} on its own page · ${fmt(m.duration)}d`,
+          subCritical.has(sub.id) ? 'Critical on that page' : '',
+          'Click to open the sub-path'
+        ].filter(Boolean).join('\n')
+      });
+    });
+
+    // The sub-path's own dependencies, so the branch reads as a network rather
+    // than a column of unrelated dots.
+    subNodes.forEach(sub => {
+      dependenciesOf(sub).forEach(dep => {
+        if (!subMetrics[dep.id]) return;
+        edges.push({
+          id: `${ghostId(pageId, dep.id)}->${ghostId(pageId, sub.id)}`,
+          from: ghostId(pageId, dep.id),
+          to: ghostId(pageId, sub.id),
+          arrows: { to: { enabled: true, scaleFactor: 0.4 } },
+          smooth: { type: 'cubicBezier', forceDirection: 'vertical', roundness: 0.4 },
+          ...ghostEdgeStyle(false)
+        });
+      });
+    });
+
+    // And the tether from the Main task down into its branch, to the tasks that
+    // start it — which is where the work actually begins.
+    subNodes
+      .filter(sub => !dependenciesOf(sub).some(d => subMetrics[d.id]))
+      .forEach(sub => {
+        edges.push({
+          id: `${parent.id}=>${ghostId(pageId, sub.id)}`,
+          from: parent.id,
+          to: ghostId(pageId, sub.id),
+          arrows: { to: { enabled: true, scaleFactor: 0.4 } },
+          smooth: { type: 'cubicBezier', forceDirection: 'vertical', roundness: 0.5 },
+          ...ghostEdgeStyle(true)
+        });
+      });
+  }
+
+  return { nodes, edges, note };
+}
+
+/** Faint, dashed, and unmistakably not part of this page's schedule. */
+function ghostStyle(isCritical) {
+  const border = isCritical ? CRITICAL_COLOR : palette.nodeBorder;
+  return {
+    borderWidth: 1,
+    shapeProperties: { borderDashes: [3, 3] },
+    shadow: false,
+    color: {
+      background: mix(palette.nodeBg, palette.canvasBg, 0.55),
+      border: mix(border, palette.canvasBg, 0.45),
+      highlight: { background: mix(palette.nodeBg, palette.canvasBg, 0.35), border },
+      hover: { background: mix(palette.nodeBg, palette.canvasBg, 0.35), border }
+    },
+    font: {
+      color: mix(palette.nodeText, palette.canvasBg, 0.4),
+      size: 9,
+      face: 'ui-monospace, monospace',
+      multi: false
+    }
+  };
+}
+
+function ghostEdgeStyle(isTether) {
+  const colour = mix(palette.edge, palette.canvasBg, isTether ? 0.3 : 0.45);
+  return {
+    width: 1,
+    dashes: isTether ? [2, 4] : [3, 3],
+    color: { color: colour, highlight: colour, hover: colour, opacity: 1 },
+    font: { size: 0 },
+    selectionWidth: 0,
+    chosen: false
+  };
 }
 
 /** Cache what the draw callbacks need so they never touch state per frame. */
@@ -473,6 +627,30 @@ export function applyVisData() {
   if (network) {
     network.setOptions({ nodes: { shape: getState().nodeShape === 'box' ? 'box' : 'circle' } });
   }
+  drawMinimap();
+}
+
+/**
+ * Redraw only the ghosts, leaving the real network alone.
+ *
+ * In "selected" mode the ghosts follow the selection, and rebuilding everything
+ * to achieve that does not work: clearing the DataSet drops the selection,
+ * which fires a deselect, which asks for another rebuild — by which time there
+ * is nothing selected and the ghosts that prompted it have gone. Touching only
+ * the ghost rows sidesteps that entirely, and is far cheaper besides.
+ */
+export function refreshGhosts() {
+  if (!nodesDS || !edgesDS) return;
+  palette = paletteFor(getState().theme);
+
+  const staleNodes = nodesDS.getIds().filter(isGhostId);
+  const staleEdges = edgesDS.getIds().filter(id => String(id).includes(GHOST_ID_PREFIX));
+  if (staleNodes.length) nodesDS.remove(staleNodes);
+  if (staleEdges.length) edgesDS.remove(staleEdges);
+
+  const { nodes, edges } = buildGhosts(allNodes());
+  if (nodes.length) nodesDS.add(nodes);
+  if (edges.length) edgesDS.add(edges);
   drawMinimap();
 }
 
@@ -693,7 +871,7 @@ export function setConnectMode(on) {
 }
 
 function addDependency(fromId, toId) {
-  if (isLaneId(fromId) || isLaneId(toId)) return;
+  if (isSyntheticId(fromId) || isSyntheticId(toId)) return;
   const found = findNode(toId);
   if (!found) return;
 
@@ -739,7 +917,7 @@ export function initNetwork(container, callbacks) {
   });
 
   network.on('hoverNode', params => {
-    if (connectMode || isLaneId(params.node)) return;
+    if (connectMode || isSyntheticId(params.node)) return;
     setTrace(traceFrom(params.node, allNodes()));
   });
   network.on('blurNode', clearTrace);
@@ -759,7 +937,7 @@ export function initNetwork(container, callbacks) {
     if (!params.nodes.length) return;
     let moved = false;
     params.nodes.forEach(id => {
-      if (isLaneId(id)) return;
+      if (isSyntheticId(id)) return;
       const pos = network.getPositions([id])[id];
       const found = findNode(id);
       if (found && pos) {
@@ -777,7 +955,7 @@ export function initNetwork(container, callbacks) {
   });
 
   network.on('selectNode', params => {
-    selectedIds = params.nodes.filter(id => !isLaneId(id));
+    selectedIds = params.nodes.filter(id => !isSyntheticId(id));
     selectedEdgeId = null;
     handlers.onSelectionChange(selectedIds);
     restyleAll();
@@ -803,7 +981,7 @@ export function initNetwork(container, callbacks) {
     if (connectMode) return;
     if (params.nodes.length) {
       const id = params.nodes[0];
-      if (isLaneId(id)) return;
+      if (isSyntheticId(id)) return;
       const found = findNode(id);
       const evt = params.event.srcEvent;
       if ((evt.altKey || evt.metaKey) && found && handlers.onFollowLink(found.node)) return;
@@ -817,10 +995,18 @@ export function initNetwork(container, callbacks) {
 
   network.on('click', params => {
     if (!connectMode) {
+      // The one thing a ghost does: take you to the page it came from, with
+      // the task it stands for already selected.
+      const ghost = params.nodes.length === 1 ? parseGhostId(params.nodes[0]) : null;
+      if (ghost) {
+        network.unselectAll();
+        handlers.onOpenGhost(ghost.pageId, ghost.nodeId);
+        return;
+      }
       const evt = params.event.srcEvent;
       if (params.nodes.length === 1 && (evt.altKey || evt.metaKey)) {
         const id = params.nodes[0];
-        if (isLaneId(id)) return;
+        if (isSyntheticId(id)) return;
         const found = findNode(id);
         if (found) handlers.onFollowLink(found.node);
       }
@@ -838,7 +1024,7 @@ export function initNetwork(container, callbacks) {
     }
 
     const clicked = params.nodes[0];
-    if (isLaneId(clicked)) return;
+    if (isSyntheticId(clicked)) return;
 
     if (!connectSource) {
       connectSource = clicked;

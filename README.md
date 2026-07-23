@@ -60,6 +60,13 @@ files you keep yourself.
   the result is readable, editable, and one step of undo.
 - **Sub-path pages** — link a task to its own diagram; the sub-path's project
   duration rolls up and replaces the parent task's estimate.
+- **Ghosted sub-paths** — draw a linked sub-path in place, hanging below the
+  task that stands for it. Main runs left to right, so the branch hangs
+  downward: depth on screen is depth in the breakdown, and the two levels stay
+  legible as different things. Ghosts are decoration, not data — they take no
+  part in this page's schedule and cannot be selected, moved, or deleted. The
+  one thing they do is take you to their page when clicked. Show them under
+  every linked task, or only under the one you have selected.
 - **Sub-path roll-up figures** — what each linked branch is actually worth:
   its share of the project duration, its share of the critical path, and its
   own completion, weighted by task duration rather than task count. The share
@@ -96,7 +103,12 @@ files you keep yourself.
   ES, duration, EF, LS, slack and LF out in a fixed grid.
 - **Grouped page tabs** — sub-paths sit under the Main task that links them,
   behind a chip that jumps back to it. The strip takes the width the header
-  has spare and wraps rather than scrolling out of sight.
+  has spare and wraps rather than scrolling out of sight. Past a dozen or so
+  it becomes a searchable picker instead: at a hundred sub-paths a strip of
+  tabs is not navigation, it is a wall, and it pushed the canvas off the bottom
+  of the window. The picker filters on page title, on the Main task the page
+  hangs from, and on that task's title — because "the one under T73" is what
+  anyone actually remembers.
 - **Milestones** — group tasks into phases, reorder them, and use the columns
   view to align the canvas and the task cards by milestone. Column headers
   carry the task count, total duration, critical count, and completion.
@@ -134,6 +146,8 @@ Open the published page, or serve the directory locally (see below).
 | Update progress | Drag the slider on the task card |
 | Reorder milestones | The arrows in the milestone header |
 | Follow a task's link | `Alt`-click (or `Cmd`-click) it |
+| Show sub-paths on Main | **Display**, then a **Sub-paths on Main** option |
+| Find a page among many | The **sub-paths** button in the page strip |
 | Assign an owner | **Assigned to** on the task, then **Resources** |
 | Resolve a double-booking | **Resources**, then **Apply** on a levelling option |
 | Set a deadline | **Settings** for the project, or **Must finish by** on a task |
@@ -218,7 +232,8 @@ use in a spreadsheet.
   },
   "baseline": null,              // captured schedule, for drift comparison
   "nodeDisplay": {           // "rollup" shows a linked sub-path's share
-    "id": true, "esEf": true, "slack": true, "rollup": false
+    "id": true, "esEf": true, "slack": true, "rollup": false,
+    "ghosts": "off"          // "off" | "selected" | "all" — sub-paths on Main
   },
   "pageOrder": ["main", "sub_1"],
   "pageTitles": { "main": "Main Diagram", "sub_1": "Sub-Path 1" },

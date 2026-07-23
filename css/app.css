@@ -124,6 +124,10 @@ body {
   gap: 0.25rem;
   flex: 1 1 auto;
   min-width: 0;
+  /* A hard ceiling regardless of how the strip is built. Wrapping without one
+   * let a large project push the canvas off the bottom of the window. */
+  max-height: 5.5rem;
+  overflow-y: auto;
   background: var(--surface-3);
   border: 1px solid var(--border);
   border-radius: 0.5rem;
@@ -951,6 +955,70 @@ body.compact-toolbar .tab-group { padding-left: 0.125rem; }
   box-shadow: 0 18px 40px var(--shadow);
   padding: 0.5rem;
 }
+/* The page picker: navigation once there are too many pages to show at once. */
+.tab-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 0.375rem;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--info) 12%, transparent);
+  white-space: nowrap;
+}
+.tab-picker:hover { color: var(--text); background: color-mix(in srgb, var(--info) 24%, transparent); }
+
+.picker-search {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.75rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-3);
+  color: var(--text);
+}
+.picker-list {
+  margin-top: 0.375rem;
+  max-height: 22rem;
+  overflow-y: auto;
+}
+.picker-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  text-align: left;
+  color: var(--text-muted);
+}
+.picker-row:hover { background: var(--surface-3); color: var(--text); }
+.picker-row-active {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+}
+.picker-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-parent {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 0.0625rem 0.25rem;
+  border-radius: 0.25rem;
+  color: var(--info);
+  background: color-mix(in srgb, var(--info) 14%, transparent);
+}
+.picker-parent-none { color: var(--text-faint); background: transparent; }
+.picker-share {
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  min-width: 2.25rem;
+  text-align: right;
+}
+
 .popover-heading {
   padding: 0.25rem 0.5rem;
   font-size: 10px;

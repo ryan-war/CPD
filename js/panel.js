@@ -682,13 +682,19 @@ export function renderSummary() {
     }
     value.title = `Deadline: ${target}`;
   }
-  $('sum-critical').textContent = usable ? ([...criticalIds].join(', ') || 'none') : '—';
+  // On a large project nearly everything can be critical, and spelling out a
+  // hundred ids turned the one-line summary into three wrapped rows.
+  const critical = $('sum-critical');
+  critical.textContent = usable ? summariseIds([...criticalIds]) : '—';
+  critical.title = usable && criticalIds.size ? [...criticalIds].join(', ') : '';
   $('sum-mode').textContent = state.estimationMode === 'pert' ? 'PERT' : 'Avg';
 
   const risk = $('sum-at-risk');
   risk.classList.toggle('hidden', !usable || !nearCritical.size);
   if (usable && nearCritical.size) {
-    $('sum-at-risk-ids').textContent = [...nearCritical].join(', ');
+    const atRisk = $('sum-at-risk-ids');
+    atRisk.textContent = summariseIds([...nearCritical]);
+    atRisk.title = [...nearCritical].join(', ');
   }
 
   const finish = $('sum-finish');
@@ -718,6 +724,16 @@ export function renderSummary() {
   const flagged = usable && dataDate != null ? (outOfSequenceIds || []) : [];
   oos.classList.toggle('hidden', !flagged.length);
   if (flagged.length) $('sum-out-of-sequence-ids').textContent = flagged.join(', ');
+}
+
+/**
+ * A list of task ids for a one-line summary: the first few, then a count. The
+ * full list stays available as the element's tooltip.
+ */
+function summariseIds(ids, limit = 12) {
+  if (!ids.length) return 'none';
+  if (ids.length <= limit) return ids.join(', ');
+  return `${ids.slice(0, limit).join(', ')} +${ids.length - limit} more`;
 }
 
 /**

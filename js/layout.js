@@ -4,7 +4,9 @@
 // `sizeOf` callback so the same code can be driven by real measurements from
 // the canvas or by estimates in a test.
 
-import { COLUMN_MIN_GAP, ROW_MIN_GAP } from './config.js';
+import {
+  COLUMN_MIN_GAP, ROW_MIN_GAP, GHOST_DROP, GHOST_ROW_GAP, GHOST_COL_GAP
+} from './config.js';
 import { dependenciesOf } from './cpm.js';
 
 /** Fallback dimensions when nothing has measured the node yet. */
@@ -261,6 +263,57 @@ export function computeCpmLayout(nodes, schedule = {}, options = {}) {
  * tighter float, then id. Returns a copy — `ms.nodes` order is the user's,
  * and reordering it in place would fight the milestone controls.
  */
+/**
+ * Where a linked sub-path's tasks sit when drawn under the Main task that
+ * stands for them.
+ *
+ * The Main diagram flows left to right, so a sub-path drawn the same way would
+ * run straight through its neighbours and read as one flat network. Hanging it
+ * downward instead uses the axis Main is not using: depth on screen becomes
+ * depth in the breakdown, and the two levels stay legible as different things.
+ *
+ * Same ranking as the main layout, rotated — longest path sets the row, and
+ * tasks sharing a row spread sideways about the parent's centre.
+ *
+ * @param {object[]} subNodes tasks of the sub-page
+ * @param {{x: number, y: number}} origin position of the parent Main task
+ * @param {{metrics?: object, graph?: object, drop?: number, rowGap?: number,
+ *          colGap?: number}} options
+ * @returns {{positions: Object<string, {x: number, y: number}>, rows: number,
+ *   depth: number}} `depth` is how far below the parent the last row sits.
+ */
+export function ghostLayout(subNodes, origin = { x: 0, y: 0 }, options = {}) {
+  const positions = {};
+  if (!subNodes || !subNodes.length) return { positions, rows: 0, depth: 0 };
+
+  const drop = options.drop ?? GHOST_DROP;
+  const rowGap = options.rowGap ?? GHOST_ROW_GAP;
+  const colGap = options.colGap ?? GHOST_COL_GAP;
+  const baseX = Number(origin?.x) || 0;
+  const baseY = Number(origin?.y) || 0;
+
+  const ranks = rankNodes(subNodes, options.graph);
+  const layers = bucketByRank(subNodes, ranks, options.metrics);
+
+  layers.forEach((layer, row) => {
+    // Centre each row on the parent so the branch hangs straight down from it
+    // rather than drifting right as it deepens.
+    const span = (layer.length - 1) * colGap;
+    layer.forEach((id, i) => {
+      positions[id] = {
+        x: baseX - span / 2 + i * colGap,
+        y: baseY + drop + row * rowGap
+      };
+    });
+  });
+
+  return {
+    positions,
+    rows: layers.length,
+    depth: layers.length ? drop + (layers.length - 1) * rowGap : 0
+  };
+}
+
 export function orderedNodes(milestone, metrics) {
   const list = (milestone?.nodes || []).slice();
   const of = (id, key) => Number(metrics?.[id]?.[key]) || 0;

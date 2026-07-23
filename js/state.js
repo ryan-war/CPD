@@ -1,6 +1,6 @@
 // Project state: shape, validation, accessors, and undo/redo history.
 
-import { DEFAULT_DISPLAY, HISTORY_MAX } from './config.js';
+import { DEFAULT_DISPLAY, HISTORY_MAX, GHOST_MODES } from './config.js';
 import { nodesOf, toDependency, predecessorIds, DEPENDENCY_TYPES, dayOrNull } from './cpm.js';
 import { DEFAULT_CALENDAR, toISODate, parseISODate } from './calendar.js';
 
@@ -138,6 +138,11 @@ export function normalizeState(data) {
 
   data.projectTitle = String(data.projectTitle || 'Critical Path Network');
   data.nodeDisplay = { ...DEFAULT_DISPLAY, ...(data.nodeDisplay || {}) };
+  // Every other display option is a boolean; this one is a mode, so a file
+  // carrying `true` or nonsense would otherwise reach the canvas as a mode.
+  if (!GHOST_MODES.includes(data.nodeDisplay.ghosts)) {
+    data.nodeDisplay.ghosts = DEFAULT_DISPLAY.ghosts;
+  }
   if (!data.layoutMode) data.layoutMode = 'free';
   if (!data.estimationMode) data.estimationMode = 'average';
   if (data.theme !== 'light') data.theme = 'dark';

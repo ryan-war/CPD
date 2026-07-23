@@ -226,6 +226,13 @@
     <div id="more-slot" class="flex flex-col gap-1"></div>
   </div>
 
+  <!-- Page picker: the tab strip's stand-in once there are too many pages -->
+  <div id="page-picker" class="hidden popover w-80" role="dialog" aria-label="Find a sub-path">
+    <input id="page-picker-search" type="search" class="picker-search"
+           placeholder="Filter by page, task, or title…" aria-label="Filter sub-paths" />
+    <div id="page-picker-list" class="picker-list"></div>
+  </div>
+
   <!-- Display options -->
   <div id="display-menu" class="hidden popover w-56 space-y-0.5" role="group" aria-label="Task display options">
     <div class="popover-heading">Show on tasks</div>
@@ -240,6 +247,12 @@
     <label class="check-row"><input type="checkbox" data-display="rollup" /> Sub-path share %</label>
     <label class="check-row"><input type="checkbox" data-display="link" checked /> Link marker</label>
     <label class="check-row"><input type="checkbox" data-display="progress" checked /> Progress %</label>
+
+    <div class="popover-heading mt-2">Sub-paths on Main</div>
+    <label class="check-row"><input type="radio" name="ghosts" data-ghosts="off" checked /> Off</label>
+    <label class="check-row"><input type="radio" name="ghosts" data-ghosts="selected" /> Under selected task</label>
+    <label class="check-row"><input type="radio" name="ghosts" data-ghosts="all" /> Under every linked task</label>
+    <p class="hint px-1">Draws a linked sub-path in place, hanging below the task that stands for it. Click one to open its page.</p>
   </div>
 
   <!-- Task -->

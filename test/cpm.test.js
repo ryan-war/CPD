@@ -14,11 +14,12 @@ import {
 } from '../js/cpm.js';
 import {
   computeCpmLayout, orderedNodes, columnGeometry, columnRowHeight, columnRowOrigin,
-  freeSpotNear
+  freeSpotNear, ghostLayout
 } from '../js/layout.js';
 import { resourceLoad, assigneeNames, levelResources } from '../js/resources.js';
 import { createDefaultState, normalizeState, captureBaseline } from '../js/state.js';
 import { createCalendar, toISODate, parseISODate } from '../js/calendar.js';
+import { ghostId, parseGhostId, isGhostId, isLaneId, isSyntheticId } from '../js/config.js';
 import { sampleTriangular, percentile, histogram } from '../js/simulate.js';
 
 const task = (id, min, max, dependencies = [], extra = {}) =>
@@ -448,6 +449,83 @@ test('auto-layout copes with an empty diagram and with a cycle', () => {
   const looped = [task('X', 1, 1, ['Y']), task('Y', 1, 1, ['X'])];
   const { positions } = layoutOf(looped);
   assert.equal(Object.keys(positions).length, 2, 'every task still gets a place');
+});
+
+// ─── Ghosted sub-paths ─────────────────────────────────────
+//
+// A linked sub-path drawn under the Main task that stands for it. Main runs
+// left to right, so the branch hangs downward — the axis Main is not using.
+
+test('a ghosted sub-path hangs below its parent, not beside it', () => {
+  const sub = [task('S1', 2, 2), task('S2', 2, 2, ['S1']), task('S3', 2, 2, ['S2'])];
+  const { positions, rows, depth } = ghostLayout(sub, { x: 500, y: 100 });
+
+  assert.equal(rows, 3, 'a chain of three is three rows deep');
+  assert.ok(positions.S1.y > 100, 'below the parent');
+  assert.ok(positions.S2.y > positions.S1.y, 'and each step further down');
+  assert.ok(positions.S3.y > positions.S2.y);
+  assert.equal(positions.S1.x, 500, 'a single-task row sits under the parent');
+  assert.equal(positions.S2.x, 500);
+  assert.ok(depth > 0);
+});
+
+test('tasks sharing a rank spread sideways about the parent', () => {
+  const sub = [task('A', 2, 2), task('B', 2, 2), task('C', 2, 2)];
+  const { positions, rows } = ghostLayout(sub, { x: 0, y: 0 });
+
+  assert.equal(rows, 1, 'three independent tasks are one rank');
+  const xs = ['A', 'B', 'C'].map(id => positions[id].x).sort((a, b) => a - b);
+  assert.ok(xs[0] < 0 && xs[2] > 0, 'centred on the parent');
+  assert.equal(xs[0] + xs[2], 0, 'and symmetrically so');
+  assert.equal(new Set(['A', 'B', 'C'].map(id => positions[id].y)).size, 1,
+    'a shared rank shares a row');
+});
+
+test('a ghost layout is deterministic and covers every task', () => {
+  const sub = [
+    task('A', 1, 1), task('B', 2, 2, ['A']), task('C', 2, 2, ['A']),
+    task('D', 1, 1, ['B', 'C'])
+  ];
+  const first = ghostLayout(sub, { x: 10, y: 20 });
+  const second = ghostLayout(sub, { x: 10, y: 20 });
+  assert.deepEqual(first.positions, second.positions);
+  assert.deepEqual(Object.keys(first.positions).sort(), ['A', 'B', 'C', 'D']);
+});
+
+test('an empty or missing sub-path lays out to nothing', () => {
+  for (const input of [[], null, undefined]) {
+    const r = ghostLayout(input, { x: 0, y: 0 });
+    assert.deepEqual(r.positions, {});
+    assert.equal(r.rows, 0);
+    assert.equal(r.depth, 0);
+  }
+});
+
+test('ghost ids round-trip and are recognised as synthetic', () => {
+  const id = ghostId('sub_7', 'T12');
+  assert.deepEqual(parseGhostId(id), { pageId: 'sub_7', nodeId: 'T12' });
+  assert.ok(isGhostId(id));
+  assert.ok(isSyntheticId(id), 'so no handler treats it as a task');
+  assert.ok(!isLaneId(id), 'but it is not a milestone lane either');
+
+  // A real task id must never be mistaken for one.
+  assert.equal(parseGhostId('T12'), null);
+  assert.ok(!isGhostId('T12'));
+  assert.ok(!isSyntheticId('T12'));
+});
+
+test('the ghost display mode is validated on import', () => {
+  const base = () => ({ diagrams: { main: { milestones: [] } } });
+  assert.equal(normalizeState(base()).nodeDisplay.ghosts, 'off', 'absent defaults off');
+  assert.equal(normalizeState({ ...base(), nodeDisplay: { ghosts: 'all' } }).nodeDisplay.ghosts, 'all');
+  // Every other display option is a boolean, so a file could easily carry one
+  // here; it must not reach the canvas as a mode.
+  for (const junk of [true, 1, 'everything', null]) {
+    assert.equal(
+      normalizeState({ ...base(), nodeDisplay: { ghosts: junk } }).nodeDisplay.ghosts,
+      'off', String(junk)
+    );
+  }
 });
 
 // ─── Columns view ──────────────────────────────────────────
