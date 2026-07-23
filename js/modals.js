@@ -360,7 +360,7 @@ export function saveSubpathForm(event) {
   }
 
   closeSubpathModal();
-  app.onChange(id ? 'Sub-path renamed' : 'Sub-path added', { fit: true, tabs: true });
+  app.onChange(id ? 'Sub-path renamed' : 'Sub-path added', { fit: true });
 }
 
 export function deleteSubpath() {
@@ -383,7 +383,7 @@ export function deleteSubpath() {
   if (state.activeView === id) state.activeView = 'main';
 
   closeSubpathModal();
-  app.onChange('Sub-path deleted', { fit: true, tabs: true });
+  app.onChange('Sub-path deleted', { fit: true });
 }
 
 // ─── Project settings ──────────────────────────────────────

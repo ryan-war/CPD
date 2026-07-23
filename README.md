@@ -27,6 +27,12 @@ saved and loaded as JSON files you keep yourself.
   these far more often than through tasks already known to be critical.
 - **Sub-path pages** — link a task to its own diagram; the sub-path's project
   duration rolls up and replaces the parent task's estimate.
+- **Sub-path roll-up figures** — what each linked branch is actually worth:
+  its share of the project duration, its share of the critical path, and its
+  own completion, weighted by task duration rather than task count. The share
+  appears on the page tab, the three figures on the parent task's card. A task
+  standing in for a sub-page takes its progress from that page instead of a
+  slider of its own.
 - **Baseline comparison** — snapshot the schedule, then see per-task and
   whole-project drift against it as things change.
 - **Cycle protection** — circular dependencies are rejected as you draw them,
@@ -48,8 +54,16 @@ saved and loaded as JSON files you keep yourself.
 
 - **Two task shapes** — circles by default, or activity-on-node boxes that lay
   ES, duration, EF, LS, slack and LF out in a fixed grid.
+- **Grouped page tabs** — sub-paths sit under the Main task that links them,
+  behind a chip that jumps back to it. The strip takes the width the header
+  has spare and wraps rather than scrolling out of sight.
 - **Milestones** — group tasks into phases, reorder them, and use the columns
-  view to align the canvas and the task cards by milestone.
+  view to align the canvas and the task cards by milestone. Column headers
+  carry the task count, total duration, critical count, and completion.
+- **CPM auto-layout** — longest-path ranks, barycenter ordering to cut edge
+  crossings, and the critical path drawn as one straight horizontal line.
+  Columns and rows are spaced by how much room the tasks actually need, so
+  box-shape diagrams do not overlap.
 - **Mini-Gantt** — timeline bars positioned by ES/EF with a real date axis,
   shaded by progress, critical and at-risk paths highlighted.
 - **Light and dark themes.**
@@ -111,8 +125,8 @@ Any static server works. There is nothing to install and nothing to build.
 
 ### Tests
 
-The scheduling engine, calendar, and simulation primitives are covered by tests
-with no dependencies beyond Node itself:
+The scheduling engine, calendar, layout, and simulation primitives are covered
+by tests with no dependencies beyond Node itself:
 
 ```sh
 node --test test/cpm.test.js
@@ -152,7 +166,9 @@ use in a spreadsheet.
     "holidays": ["2026-12-25"]
   },
   "baseline": null,              // captured schedule, for drift comparison
-  "nodeDisplay": { "id": true, "esEf": true, "slack": true },
+  "nodeDisplay": {           // "rollup" shows a linked sub-path's share
+    "id": true, "esEf": true, "slack": true, "rollup": false
+  },
   "pageOrder": ["main", "sub_1"],
   "pageTitles": { "main": "Main Diagram", "sub_1": "Sub-Path 1" },
   "diagrams": {
@@ -199,7 +215,9 @@ js/main.js               boot, orchestration, event wiring
 js/state.js              project shape, validation, accessors, undo/redo
 js/cpm.js                scheduling engine — pure, no DOM
 js/calendar.js           working-day calendar — pure, no DOM
-js/schedule.js           per-render schedule cache, at-risk set, baseline drift
+js/layout.js             auto-layout and column geometry — pure, no DOM
+js/schedule.js           per-render schedule cache, at-risk set, baseline drift,
+                         sub-path roll-up figures
 js/sampling.js           distributions and summary statistics
 js/simulate.js           Monte Carlo driver (worker, with inline fallback)
 js/simulate.worker.js    the simulation loop itself
@@ -214,8 +232,8 @@ js/config.js             constants and theme palettes
 test/cpm.test.js         engine, calendar, and migration tests
 ```
 
-`js/cpm.js` and `js/calendar.js` have no DOM dependency and can be imported
-directly in Node:
+`js/cpm.js`, `js/calendar.js`, and `js/layout.js` have no DOM dependency and
+can be imported directly in Node:
 
 ```sh
 node --input-type=module -e "

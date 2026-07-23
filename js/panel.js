@@ -1,10 +1,11 @@
 // Bottom panel: milestone sections, task cards, the mini-Gantt, and the legend.
 
 import { $, escapeHtml, refreshIcons } from './dom.js';
-import { schedule, fmt, fmtDelta, getCriticality } from './schedule.js';
+import { schedule, fmt, fmtDelta, fmtPercent, getCriticality, rollupForNode } from './schedule.js';
 import { getState, currentDiagram } from './state.js';
 import { dependenciesOf } from './cpm.js';
 import { linkBadgeHtml } from './links.js';
+import { orderedNodes } from './layout.js';
 import { CRITICAL_COLOR, NEAR_CRITICAL_COLOR, STATUS_COLORS, STATUS_LABELS } from './config.js';
 
 let ganttOpen = false;
@@ -55,6 +56,42 @@ function driftChip(drift) {
   return `<span class="drift-chip ${cls}" title="Finish versus baseline">${fmtDelta(drift.finish)}d</span>`;
 }
 
+/**
+ * What a linked sub-path is worth, on the card of the task standing in for it.
+ *
+ * Roll-up already replaced the task's estimate with the sub-page's duration,
+ * but silently: nothing said how large a share of the project that branch had
+ * become, or how far through it was. All three answers go here.
+ */
+function rollupBlockHtml(rollup) {
+  if (!rollup) return '';
+  const done = rollup.progress != null ? rollup.progress : 0;
+  return `
+    <div class="rollup-block" title="Figures rolled up from the linked sub-path">
+      <div class="rollup-head">
+        <i data-lucide="git-fork" class="w-3 h-3" aria-hidden="true"></i>
+        Sub-path roll-up
+      </div>
+      <div class="grid grid-cols-2 gap-1.5 text-[10px]">
+        <div class="stat-tile">
+          <div class="text-muted">Of project</div>
+          <div>${fmtPercent(rollup.share)} · ${fmt(rollup.duration)}d</div>
+        </div>
+        <div class="stat-tile ${rollup.isCritical ? 'stat-critical' : ''}">
+          <div class="text-muted">Of critical path</div>
+          <div>${rollup.isCritical ? fmtPercent(rollup.criticalShare) : 'not on it'}</div>
+        </div>
+      </div>
+      ${rollup.progress != null ? `
+      <div class="crit-meter">
+        <span class="text-muted text-[10px]">Complete</span>
+        <div class="crit-track"><div class="crit-fill rollup-fill" style="width:${done}%"></div></div>
+        <span class="text-[10px]">${Math.round(done)}%</span>
+      </div>
+      <p class="hint">Weighted by task duration across the sub-path.</p>` : ''}
+    </div>`;
+}
+
 function taskCardHtml(node, ctx) {
   const { metrics, criticalIds, nearCritical, successors, calendar, drift } = ctx;
   const m = metrics[node.id] || {};
@@ -72,6 +109,11 @@ function taskCardHtml(node, ctx) {
 
   const edgeClass = isCrit ? 'card-critical' : isNear ? 'card-near-critical' : '';
   const progress = Math.max(0, Math.min(100, Number(node.progress) || 0));
+  // A task standing in for a sub-page does not own its own completion any
+  // more — the sub-page's tasks decide it — so the slider goes away rather
+  // than sitting there implying otherwise.
+  const rollup = rollupForNode(node);
+  const rolledProgress = rollup && rollup.progress != null;
 
   return `
     <article data-task-card="${escapeHtml(node.id)}" class="task-card ${edgeClass}">
@@ -113,13 +155,16 @@ function taskCardHtml(node, ctx) {
         <span class="text-[10px]">${Math.round(criticality * 100)}%</span>
       </div>` : ''}
 
+      ${rollupBlockHtml(rollup)}
+
+      ${rolledProgress ? '' : `
       <label class="progress-row">
         <span class="text-muted text-[10px]">Progress</span>
         <input type="range" min="0" max="100" step="5" value="${progress}"
                data-progress-for="${escapeHtml(node.id)}"
                aria-label="Progress for task ${escapeHtml(node.id)}" />
         <output class="text-[10px] tabular-nums">${progress}%</output>
-      </label>
+      </label>`}
 
       <div class="flex flex-wrap gap-1 text-[10px]">
         <span class="text-muted self-center">Pred:</span>
@@ -128,6 +173,43 @@ function taskCardHtml(node, ctx) {
         ${succs.length ? succs.map(s => `<span class="${chip}">${escapeHtml(s)}</span>`).join('') : '<span class="text-faint">none</span>'}
       </div>
     </article>`;
+}
+
+/**
+ * Totals for a milestone header. A column titled only "Phase 2" gave no reason
+ * to look at it before any other; how much work it holds, how much of that is
+ * critical, and how far through it is are the reasons.
+ */
+function milestoneStats(ms, ctx) {
+  const nodes = ms.nodes || [];
+  let duration = 0;
+  let weighted = 0;
+  let critical = 0;
+
+  nodes.forEach(n => {
+    const m = ctx.metrics[n.id] || {};
+    const d = Number(m.duration) || 0;
+    duration += d;
+    weighted += d * Math.max(0, Math.min(100, Number(n.progress) || 0));
+    if (ctx.criticalIds.has(n.id)) critical++;
+  });
+
+  return {
+    count: nodes.length,
+    duration,
+    critical,
+    progress: duration > 0 ? weighted / duration : 0
+  };
+}
+
+function milestoneStatsHtml(ms, ctx) {
+  const s = milestoneStats(ms, ctx);
+  if (!s.count) return '<span class="ms-stat text-faint">empty</span>';
+  return `
+    <span class="ms-stat" title="Tasks in this milestone">${s.count} task${s.count === 1 ? '' : 's'}</span>
+    <span class="ms-stat" title="Total duration of its tasks">${fmt(s.duration)}d</span>
+    ${s.critical ? `<span class="ms-stat ms-stat-critical" title="Tasks on the critical path">${s.critical} critical</span>` : ''}
+    <span class="ms-stat" title="Completion, weighted by task duration">${Math.round(s.progress)}%</span>`;
 }
 
 function milestoneActionsHtml(ms, index, total, compact) {
@@ -161,6 +243,7 @@ export function renderBottomPanel() {
 
   if (!diagram.milestones.length) {
     container.className = columnsMode ? '' : 'space-y-4 flex-1 min-h-0';
+    container.style.removeProperty('--swim-cols');
     container.innerHTML = `
       <div class="text-center py-10 text-muted text-sm w-full">
         No milestones yet. Select <strong>Add Milestone</strong> to get started.
@@ -171,27 +254,39 @@ export function renderBottomPanel() {
 
   const total = diagram.milestones.length;
   if (columnsMode) {
+    // One grid across every column, with each card placed in an explicit row,
+    // so row n lines up horizontally the whole way across — the same ordinal
+    // rows the canvas puts its tasks in.
     container.className = '';
-    container.innerHTML = diagram.milestones.map((ms, i) => `
-      <div class="swim-col">
-        <div class="swim-col-head flex items-center justify-between gap-2">
-          <h3 class="text-xs font-semibold truncate" title="${escapeHtml(ms.title)}">${escapeHtml(ms.title)}</h3>
-          ${milestoneActionsHtml(ms, i, total, true)}
-        </div>
-        <div class="swim-col-body">
-          ${(ms.nodes || []).map(n => taskCardHtml(n, ctx)).join('') || '<p class="text-xs text-muted">No tasks</p>'}
-        </div>
-      </div>`).join('');
+    container.style.setProperty('--swim-cols', String(total));
+    container.innerHTML = diagram.milestones.map((ms, i) => {
+      const head = `
+        <div class="swim-col-head" style="grid-column:${i + 1};grid-row:1">
+          <div class="flex items-center justify-between gap-2">
+            <h3 class="text-xs font-semibold truncate" title="${escapeHtml(ms.title)}">${escapeHtml(ms.title)}</h3>
+            ${milestoneActionsHtml(ms, i, total, true)}
+          </div>
+          <div class="ms-stats">${milestoneStatsHtml(ms, ctx)}</div>
+        </div>`;
+      const cards = orderedNodes(ms, metrics).map((n, row) =>
+        `<div class="swim-cell" style="grid-column:${i + 1};grid-row:${row + 2}">${taskCardHtml(n, ctx)}</div>`
+      ).join('') || `<div class="swim-cell" style="grid-column:${i + 1};grid-row:2"><p class="text-xs text-muted">No tasks</p></div>`;
+      return head + cards;
+    }).join('');
   } else {
     container.className = 'space-y-4 flex-1 min-h-0';
+    container.style.removeProperty('--swim-cols');
     container.innerHTML = diagram.milestones.map((ms, i) => `
       <section class="milestone-section">
         <div class="milestone-head">
-          <h3 class="text-sm font-medium">${escapeHtml(ms.title)}</h3>
+          <div class="min-w-0">
+            <h3 class="text-sm font-medium truncate">${escapeHtml(ms.title)}</h3>
+            <div class="ms-stats">${milestoneStatsHtml(ms, ctx)}</div>
+          </div>
           ${milestoneActionsHtml(ms, i, total, false)}
         </div>
         <div class="p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          ${(ms.nodes || []).map(n => taskCardHtml(n, ctx)).join('') || '<p class="text-xs text-muted col-span-full">No tasks in this milestone.</p>'}
+          ${orderedNodes(ms, metrics).map(n => taskCardHtml(n, ctx)).join('') || '<p class="text-xs text-muted col-span-full">No tasks in this milestone.</p>'}
         </div>
       </section>`).join('');
   }

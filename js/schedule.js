@@ -5,16 +5,22 @@
 // those also rebuilt the sub-path roll-up from scratch. Here the schedule is
 // computed once, cached, and invalidated whenever state changes.
 
-import { computeCPM, createRollup, compileGraph } from './cpm.js';
+import {
+  computeCPM, createRollup, createProgressRollup, compileGraph, nodesOf
+} from './cpm.js';
 import { createCalendar } from './calendar.js';
 import { getState, allNodes } from './state.js';
 
 let cached = null;
+let cachedMain = null;
+let cachedRollups = null;
 let criticality = null;
 
 /** Drop the cached schedule. Call after any mutation. */
 export function invalidateSchedule() {
   cached = null;
+  cachedMain = null;
+  cachedRollups = null;
 }
 
 /**
@@ -56,6 +62,91 @@ export function schedule() {
     drift: baselineDrift(result, state.baseline)
   };
   return cached;
+}
+
+/**
+ * The Main Diagram's schedule, whichever page is on screen. Sub-path figures
+ * are all relative to Main — a branch is 30% of *the project*, not of itself —
+ * so a sub-page needs Main costed even while Main is not being displayed.
+ */
+export function mainSchedule() {
+  const state = getState();
+  if (state.activeView === 'main') return schedule();
+  if (cachedMain) return cachedMain;
+
+  const nodes = nodesOf(state.diagrams.main);
+  const mode = state.estimationMode;
+  const rollup = createRollup(state.diagrams, mode);
+  cachedMain = { ...computeCPM(nodes, { mode, rollup }), nodes };
+  return cachedMain;
+}
+
+/**
+ * What each linked sub-page is worth, as a share of the Main Diagram.
+ *
+ * A sub-path replacing a task's estimate told you nothing about its weight in
+ * the project. These three figures do: how much of the total duration the
+ * branch accounts for, how much of the critical path runs through it, and how
+ * far through its own work it is.
+ *
+ * @returns {{byPage: Map<string, object>, byNode: Map<string, object>}}
+ *   entries of `{pageId, mainNodeId, parents, duration, share, criticalShare,
+ *   isCritical, progress}`
+ */
+export function subPathRollups() {
+  if (cachedRollups) return cachedRollups;
+
+  const state = getState();
+  const { metrics, criticalIds, projectDuration, nodes } = mainSchedule();
+  const progressOf = createProgressRollup(state.diagrams, state.estimationMode);
+  const byPage = new Map();
+  const byNode = new Map();
+
+  nodes.forEach(node => {
+    const pageId = node.linkedSubPage;
+    if (!pageId || !state.diagrams[pageId]) return;
+    // An empty sub-page rolls nothing up: the task is still costed from its own
+    // estimate, so crediting the branch with a share of the project would be
+    // reporting the task's own duration back as if it came from somewhere else.
+    if (!nodesOf(state.diagrams[pageId]).length) return;
+
+    const duration = Number(metrics[node.id]?.duration) || 0;
+    const isCritical = criticalIds.has(node.id);
+    const entry = {
+      pageId,
+      mainNodeId: node.id,
+      mainTitle: node.title || node.id,
+      parents: [node.id],
+      duration,
+      share: projectDuration > 0 ? duration / projectDuration : 0,
+      // The critical path *is* the project duration, so a critical task's
+      // share of one is its share of the other. Off the path it contributes
+      // nothing to the length at all.
+      criticalShare: isCritical && projectDuration > 0 ? duration / projectDuration : 0,
+      isCritical,
+      progress: progressOf(pageId)
+    };
+    byNode.set(node.id, entry);
+
+    // A page can be linked from more than one Main task. The first one owns
+    // it — for grouping, and for the share the tab is labelled with.
+    if (byPage.has(pageId)) byPage.get(pageId).parents.push(node.id);
+    else byPage.set(pageId, entry);
+  });
+
+  cachedRollups = { byPage, byNode };
+  return cachedRollups;
+}
+
+/** The roll-up for one sub-page, or null when Main does not link it. */
+export function rollupForPage(pageId) {
+  return subPathRollups().byPage.get(pageId) || null;
+}
+
+/** What a Main task's linked sub-page contributes, or null if it has none. */
+export function rollupForNode(node) {
+  if (!node?.linkedSubPage) return null;
+  return subPathRollups().byNode.get(node.id) || null;
 }
 
 /**
@@ -102,6 +193,12 @@ function baselineDrift(result, baseline) {
 export function fmt(value) {
   if (value == null || Number.isNaN(value)) return '—';
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+/** A 0–1 ratio as a whole percentage: "34%". */
+export function fmtPercent(ratio) {
+  if (ratio == null || Number.isNaN(ratio)) return '—';
+  return Math.round(ratio * 100) + '%';
 }
 
 /** Signed variance, for baseline drift: "+2.5", "-1", "0". */

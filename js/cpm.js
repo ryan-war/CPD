@@ -86,6 +86,61 @@ export function createRollup(diagrams, mode) {
   };
 }
 
+/**
+ * Progress roll-up resolver: how complete a page is, weighted by the duration
+ * each task actually contributes. A page is not 50% done because half its
+ * tasks are — it is 50% done when half its *work* is, so a ten-day task counts
+ * for ten times a one-day one.
+ *
+ * Memoised and cycle-guarded exactly as `createRollup`, and recursive through
+ * the same links: a task standing in for a sub-page reports that page's
+ * progress rather than its own stored value.
+ *
+ * @returns {(pageId: string) => number|null} 0–100, or null for a page with no
+ *   tasks — "empty" and "nothing done yet" are different answers.
+ */
+export function createProgressRollup(diagrams, mode) {
+  const rollup = createRollup(diagrams, mode);
+  const cache = new Map();
+  const visiting = new Set();
+
+  return function pageProgress(pageId) {
+    if (cache.has(pageId)) return cache.get(pageId);
+    const diagram = diagrams && diagrams[pageId];
+    if (!diagram) return null;
+    if (visiting.has(pageId)) return null; // link cycle — no answer to give
+    visiting.add(pageId);
+
+    const nodes = nodesOf(diagram);
+    let weighted = 0;
+    let total = 0;
+    nodes.forEach(node => {
+      const weight = durationOf(node, { mode, rollup });
+      const nested = node.linkedSubPage ? pageProgress(node.linkedSubPage) : null;
+      const percent = nested != null ? nested : clampPercent(node.progress);
+      weighted += weight * percent;
+      total += weight;
+    });
+
+    visiting.delete(pageId);
+    // Zero-duration tasks still carry progress; fall back to a plain mean so a
+    // page of milestones does not divide by zero.
+    const value = !nodes.length
+      ? null
+      : total > 0
+        ? weighted / total
+        : nodes.reduce((sum, n) => sum + clampPercent(n.progress), 0) / nodes.length;
+    cache.set(pageId, value);
+    return value;
+  };
+}
+
+function clampPercent(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, n));
+}
+
 /** Duration actually used for a task, honouring overrides and roll-up. */
 export function durationOf(node, { mode, overrides, rollup } = {}) {
   if (overrides && overrides[node.id] != null) return overrides[node.id];

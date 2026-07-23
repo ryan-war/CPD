@@ -1,20 +1,22 @@
 // Boot, orchestration, and event wiring.
 
-import { COLUMN_GAP } from './config.js';
 import { $, escapeHtml, toast, refreshIcons, closeAllModals } from './dom.js';
 import {
   getState, normalizeState, seedHistory, commit, undo, redo, canUndo, canRedo,
   currentDiagram, allNodes, findNode, pageTitle, nextNodeId, uid, displayOpts,
   captureBaseline
 } from './state.js';
-import { schedule, invalidateSchedule, clearCriticality } from './schedule.js';
+import {
+  schedule, invalidateSchedule, clearCriticality, rollupForPage, fmtPercent
+} from './schedule.js';
 import { dependenciesOf, wouldCreateCycle, toDependency } from './cpm.js';
-import { followNodeLink } from './links.js';
+import { followNodeLink, groupPagesByMainNode } from './links.js';
+import { computeCpmLayout, orderedNodes, columnRowHeight, columnRowOrigin } from './layout.js';
 import {
   initNetwork, applyVisData, fitView, focusNode, redraw, savePositionsFromNetwork,
   setConnectMode, isConnectMode, getSelection, clearSelection, clearTrace,
   setSearchQuery, getSearchQuery, matchesSearch, refreshHighlights,
-  selectNodes, zoomBy, drawMinimap, getNetwork
+  selectNodes, zoomBy, drawMinimap, getNetwork, nodeSizeOf, columnLayout
 } from './network.js';
 import {
   renderBottomPanel, renderGantt, renderSummary, renderLegend, clearMonteCarloSummary,
@@ -45,6 +47,10 @@ function render({ fit = false } = {}) {
   $('work-area').classList.toggle('swimlane-mode', getState().layoutMode === 'milestone');
   applyVisData();
   renderSummary();
+  // The tabs carry each sub-path's share of the project, which any edit can
+  // move, so they are rebuilt with everything else rather than only when a
+  // page is added or renamed.
+  updateTabUI();
   renderBottomPanel();
   renderGantt();
   renderLegend();
@@ -54,14 +60,13 @@ function render({ fit = false } = {}) {
 }
 
 /** A state change: record history, clear stale results, re-render. */
-function onChange(message, { fit = false, tabs = false, relayout = false } = {}) {
+function onChange(message, { fit = false, relayout = false } = {}) {
   if (relayout && getState().layoutMode === 'milestone') {
     applyMilestoneLayout({ silent: true });
   }
   commit();
   clearMonteCarloSummary();
   clearCriticality();
-  if (tabs) updateTabUI();
   render({ fit });
   if (message) toast(message, 'success');
 }
@@ -76,28 +81,79 @@ function updateCanvasEmptyState() {
   $('canvas-empty').classList.toggle('hidden', allNodes().length > 0);
 }
 
+/** One page tab, carrying its share of the project when it has one. */
+function tabButtonHtml(id, activeView) {
+  const active = id === activeView;
+  const rollup = id === 'main' ? null : rollupForPage(id);
+  const badge = rollup && rollup.share > 0
+    ? `<span class="tab-share" title="${fmtPercent(rollup.share)} of the project duration">${fmtPercent(rollup.share)}</span>`
+    : '';
+  const title = id === 'main'
+    ? ''
+    : ` title="${escapeHtml(rollupTabTitle(id, rollup))}"`;
+  return `<button type="button" role="tab" aria-selected="${active}" data-view="${escapeHtml(id)}" class="tab-btn${active ? ' tab-btn-active' : ''}"${title}>${escapeHtml(pageTitle(id))}${badge}</button>`;
+}
+
+function rollupTabTitle(id, rollup) {
+  const lines = ['Double-click to rename'];
+  if (rollup) {
+    lines.push(`${fmtPercent(rollup.share)} of the project duration`);
+    if (rollup.criticalShare > 0) {
+      lines.push(`${fmtPercent(rollup.criticalShare)} of the critical path`);
+    }
+    if (rollup.progress != null) lines.push(`${Math.round(rollup.progress)}% complete`);
+    if (rollup.parents.length > 1) lines.push(`Also linked from ${rollup.parents.slice(1).join(', ')}`);
+  }
+  return lines.join(' · ');
+}
+
+/**
+ * The page strip, with sub-paths gathered under the Main task each belongs to.
+ * A flat row of "Sub-Path 1 … 7" told you nothing about what any of them was
+ * part of; the parent chip does, and doubles as a jump back to that task.
+ */
 function updateTabUI() {
   const state = getState();
-  const nav = $('page-tabs');
-  nav.innerHTML = (state.pageOrder || []).map(id => {
-    const active = id === state.activeView;
-    return `<button type="button" role="tab" aria-selected="${active}" data-view="${escapeHtml(id)}" class="tab-btn${active ? ' tab-btn-active' : ''}"${id !== 'main' ? ' title="Double-click to rename"' : ''}>${escapeHtml(pageTitle(id))}</button>`;
+  const tabs = $('page-tabs');
+  const groups = groupPagesByMainNode();
+
+  tabs.innerHTML = tabButtonHtml('main', state.activeView) + groups.map(group => {
+    const chip = group.mainNodeId
+      ? `<button type="button" class="tab-parent" data-parent-node="${escapeHtml(group.mainNodeId)}" title="${escapeHtml(`${group.mainNodeId} — ${group.mainTitle}`)}">${escapeHtml(group.mainNodeId)}<span aria-hidden="true">▸</span></button>`
+      : '<span class="tab-parent tab-parent-none" title="Not linked from any Main task">⌁</span>';
+    return `<span class="tab-group">${chip}${group.pages.map(id => tabButtonHtml(id, state.activeView)).join('')}</span>`;
   }).join('');
 
-  nav.querySelectorAll('.tab-btn').forEach(btn => {
+  tabs.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
     btn.addEventListener('dblclick', event => {
       event.preventDefault();
       if (btn.dataset.view !== 'main') openSubpathModal(btn.dataset.view);
     });
   });
+  tabs.querySelectorAll('[data-parent-node]').forEach(btn => {
+    btn.addEventListener('click', () =>
+      followNodeLink({ linkedMainNode: btn.dataset.parentNode }, nav));
+  });
 
-  $('view-label').textContent = `(${pageTitle(state.activeView)})`;
+  updateViewLabel();
   $('project-title').textContent = state.projectTitle;
   updateLayoutButtons();
   updatePertButton();
   syncDisplayMenu();
-  refreshIcons(nav);
+  refreshIcons(tabs);
+}
+
+/** Which page you are on, and — for a sub-path — what it is worth. */
+function updateViewLabel() {
+  const state = getState();
+  const rollup = state.activeView === 'main' ? null : rollupForPage(state.activeView);
+  const parts = [pageTitle(state.activeView)];
+  if (rollup) {
+    parts.push(`${fmtPercent(rollup.share)} of Main`);
+    parts.push(`via ${rollup.mainNodeId}`);
+  }
+  $('view-label').textContent = `(${parts.join(' · ')})`;
 }
 
 function switchView(view) {
@@ -107,7 +163,6 @@ function switchView(view) {
   state.activeView = view;
   clearSelection();
   clearTrace();
-  updateTabUI();
   render({ fit: true });
 }
 
@@ -297,37 +352,20 @@ function applyAutoLayout() {
   }
 
   getState().layoutMode = 'cpm';
-  const { metrics, order } = schedule();
-
-  const levels = {};
-  order.forEach(id => {
-    const deps = dependenciesOf(metrics[id]).filter(d => metrics[d.id]);
-    levels[id] = deps.length ? Math.max(...deps.map(d => levels[d.id] ?? 0)) + 1 : 0;
-  });
-  nodes.forEach(n => { if (levels[n.id] == null) levels[n.id] = 0; });
-
-  const byLevel = new Map();
-  Object.keys(levels).forEach(id => {
-    const level = levels[id];
-    if (!byLevel.has(level)) byLevel.set(level, []);
-    byLevel.get(level).push(id);
-  });
-
-  const xGap = 240;
-  const yGap = 150;
-  [...byLevel.keys()].sort((a, b) => a - b).forEach(level => {
-    const row = byLevel.get(level);
-    const totalHeight = (row.length - 1) * yGap;
-    row.forEach((id, i) => {
-      const found = findNode(id);
-      if (found) found.node.position = { x: level * xGap, y: -totalHeight / 2 + i * yGap };
-    });
+  const { positions } = computeCpmLayout(nodes, schedule(), { sizeOf: nodeSizeOf });
+  nodes.forEach(n => {
+    if (positions[n.id]) n.position = positions[n.id];
   });
 
   updateLayoutButtons();
   onChange('CPM auto-layout applied', { fit: true });
 }
 
+/**
+ * Columns view: one column per milestone, tasks within it in schedule order.
+ * The row a task occupies here is the row its card takes in the panel, so the
+ * two read as the same table.
+ */
 function applyMilestoneLayout({ silent = false } = {}) {
   const diagram = currentDiagram();
   if (!diagram.milestones.length) {
@@ -336,13 +374,17 @@ function applyMilestoneLayout({ silent = false } = {}) {
   }
 
   getState().layoutMode = 'milestone';
-  const yGap = 150;
-  const startY = 20;
+  const { metrics } = schedule();
+  const { columns } = columnLayout(diagram);
+  const rowHeight = columnRowHeight(diagram.milestones, nodeSizeOf);
+  const originY = columnRowOrigin(diagram.milestones, rowHeight);
+
   diagram.milestones.forEach((ms, col) => {
-    const list = ms.nodes || [];
-    const totalHeight = Math.max(0, (list.length - 1) * yGap);
-    list.forEach((n, row) => {
-      n.position = { x: col * COLUMN_GAP, y: startY - totalHeight / 2 + row * yGap };
+    orderedNodes(ms, metrics).forEach((n, row) => {
+      n.position = {
+        x: columns[col] ? columns[col].centre : 0,
+        y: originY + row * rowHeight
+      };
     });
   });
 
@@ -444,7 +486,6 @@ function wireToolbar() {
 
   bindFileInput(() => {
     applyTheme();
-    updateTabUI();
     setGanttOpen(isGanttOpen());
     render({ fit: true });
   });
@@ -619,7 +660,6 @@ function afterHistoryMove() {
   clearMonteCarloSummary();
   clearCriticality();
   applyTheme();
-  updateTabUI();
   render();
 }
 
@@ -854,7 +894,6 @@ function boot() {
     }
   });
 
-  updateTabUI();
   render({ fit: true });
 }
 

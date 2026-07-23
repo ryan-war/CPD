@@ -8,7 +8,14 @@ export const SELECTED_COLOR = '#22d3ee';
 
 export const LANE_COLORS = ['#1e3a5f', '#1a3d32', '#3d2a1a', '#3d1a2e', '#2a1a3d', '#1a353d'];
 export const LANE_COLORS_LIGHT = ['#dbeafe', '#d1fae5', '#fef3c7', '#fce7f3', '#ede9fe', '#cffafe'];
-export const COLUMN_GAP = 280;
+/**
+ * Layout spacing. These are minimums and gutters, not fixed pitches: the
+ * layout code sizes each column and row from the tasks actually in it, so a
+ * milestone of wide activity-on-node boxes gets the room it needs and one
+ * holding a single circle does not leave a hole.
+ */
+export const COLUMN_MIN_GAP = 140;
+export const ROW_MIN_GAP = 46;
 export const LANE_ID_PREFIX = '__lane__';
 
 /**
@@ -77,7 +84,8 @@ export const DEFAULT_DISPLAY = {
   link: true,
   progress: true,
   dates: false,
-  criticality: false
+  criticality: false,
+  rollup: false
 };
 
 export const HISTORY_MAX = 50;

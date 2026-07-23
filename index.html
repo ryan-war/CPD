@@ -18,13 +18,13 @@
     <!-- Top bar -->
     <header id="app-header">
       <div class="flex flex-wrap items-center gap-2 justify-between">
-        <div class="flex items-center gap-3 min-w-0">
-          <div class="flex items-center gap-2">
+        <div class="flex items-center gap-3 min-w-0 flex-1">
+          <div class="flex items-center gap-2 shrink-0">
             <i data-lucide="git-branch" class="w-5 h-5 text-critical" aria-hidden="true"></i>
             <h1 id="project-title" class="project-title" contenteditable="true" spellcheck="false"
                 role="textbox" aria-label="Project title">Critical Path Network</h1>
           </div>
-          <nav id="page-tabs" role="tablist" aria-label="Diagram pages"></nav>
+          <nav id="page-tabs" class="min-w-0" role="tablist" aria-label="Diagram pages"></nav>
           <button type="button" id="btn-add-subpath" title="Add sub-path" class="btn-dashed">
             <i data-lucide="plus" class="w-3.5 h-3.5" aria-hidden="true"></i> Sub-Path
           </button>
@@ -212,6 +212,7 @@
     <label class="check-row"><input type="checkbox" data-display="lsLf" checked /> LS / LF</label>
     <label class="check-row"><input type="checkbox" data-display="slack" checked /> Slack</label>
     <label class="check-row"><input type="checkbox" data-display="criticality" /> Criticality %</label>
+    <label class="check-row"><input type="checkbox" data-display="rollup" /> Sub-path share %</label>
     <label class="check-row"><input type="checkbox" data-display="link" checked /> Link marker</label>
     <label class="check-row"><input type="checkbox" data-display="progress" checked /> Progress %</label>
   </div>

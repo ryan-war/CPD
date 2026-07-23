@@ -2,14 +2,15 @@
 
 import {
   CRITICAL_COLOR, NEAR_CRITICAL_COLOR, TRACE_COLOR, SEARCH_COLOR, SELECTED_COLOR,
-  COLUMN_GAP, LANE_ID_PREFIX, STATUS_COLORS, MINIMAP_WIDTH, MINIMAP_HEIGHT,
+  LANE_ID_PREFIX, STATUS_COLORS, MINIMAP_WIDTH, MINIMAP_HEIGHT,
   isLaneId, paletteFor
 } from './config.js';
 import { $, toast } from './dom.js';
 import { traceFrom, wouldCreateCycle, dependenciesOf, isDrivingLink } from './cpm.js';
-import { schedule, fmt, getCriticality } from './schedule.js';
+import { schedule, fmt, fmtPercent, getCriticality, rollupForNode } from './schedule.js';
 import { getState, currentDiagram, allNodes, findNode, displayOpts } from './state.js';
 import { linkTooltip } from './links.js';
+import { columnGeometry } from './layout.js';
 
 let network = null;
 let nodesDS = null;
@@ -111,6 +112,11 @@ function buildNodeLabel(node, metric, state, calendar) {
     if (index != null) lines.push(`Crit:${Math.round(index * 100)}%`);
   }
 
+  if (d.rollup) {
+    const entry = rollupForNode(node);
+    if (entry) lines.push(`Sub:${fmtPercent(entry.share)}`);
+  }
+
   return lines.join('\n') || node.id;
 }
 
@@ -147,12 +153,57 @@ const center = pad;
 
 function nodeFontSize() {
   const d = displayOpts();
-  const count = ['title', 'minMax', 'esEf', 'lsLf', 'slack', 'progress', 'dates', 'criticality']
+  const count = ['title', 'minMax', 'esEf', 'lsLf', 'slack', 'progress', 'dates', 'criticality', 'rollup']
     .filter(k => d[k]).length;
   if (count >= 5) return 9;
   if (count >= 4) return 10;
   if (count >= 2) return 11;
   return 12;
+}
+
+// ─── Node dimensions ───────────────────────────────────────
+//
+// The layouts space columns and rows by how much room a task actually takes.
+// vis-network knows that exactly, but only once it has drawn, so an estimate
+// from the label is recorded as each node is built and stands in until then.
+
+let sizeEstimates = new Map();
+
+function estimateNodeSize(label, boxes) {
+  const lines = String(label).split('\n');
+  const fontSize = nodeFontSize();
+  if (boxes) {
+    const widest = Math.max(...lines.map(line => line.length));
+    return {
+      width: Math.max(150, widest * fontSize * 0.62) + 20,
+      height: lines.length * (fontSize + 4) + 20
+    };
+  }
+  const diameter = Math.min(58, 32 + lines.length * 4) * 2;
+  return { width: diameter, height: diameter };
+}
+
+/**
+ * Measured width and height of a task on the canvas, falling back to the
+ * estimate recorded when its label was built.
+ */
+export function nodeSizeOf(id) {
+  if (network) {
+    try {
+      const box = network.getBoundingBox(id);
+      const width = box ? box.right - box.left : 0;
+      const height = box ? box.bottom - box.top : 0;
+      if (width > 0 && height > 0) return { width, height };
+    } catch {
+      // not drawn yet — fall through to the estimate
+    }
+  }
+  return sizeEstimates.get(id) || null;
+}
+
+/** Milestone column offsets and widths, sized to the tasks in each column. */
+export function columnLayout(diagram) {
+  return columnGeometry((diagram || currentDiagram()).milestones || [], nodeSizeOf);
 }
 
 // ─── Styling ───────────────────────────────────────────────
@@ -288,33 +339,7 @@ export function buildVisData() {
   const diagram = currentDiagram();
   const boxes = state.nodeShape === 'box';
   const visNodes = [];
-
-  if (state.layoutMode === 'milestone') {
-    (diagram.milestones || []).forEach((ms, i) => {
-      const lane = palette.lanes[i % palette.lanes.length];
-      visNodes.push({
-        id: `${LANE_ID_PREFIX}${ms.id}`,
-        label: ms.title,
-        x: i * COLUMN_GAP,
-        y: -220,
-        fixed: true,
-        shape: 'box',
-        margin: 10,
-        widthConstraint: { maximum: COLUMN_GAP - 40 },
-        font: { color: palette.laneText, size: 13, face: 'system-ui, sans-serif', bold: true },
-        color: {
-          background: lane,
-          border: palette.laneBorder,
-          highlight: { background: lane, border: palette.edgeHighlight },
-          hover: { background: lane, border: palette.edgeHighlight }
-        },
-        borderWidth: 1,
-        shadow: false,
-        chosen: false,
-        physics: false
-      });
-    });
-  }
+  sizeEstimates = new Map();
 
   nodes.forEach(node => {
     const metric = metrics[node.id];
@@ -324,6 +349,8 @@ export function buildVisData() {
     const lineCount = label.split('\n').length;
     const found = findNode(node.id);
     const criticality = getCriticality()?.get(node.id);
+    const rollup = rollupForNode(node);
+    sizeEstimates.set(node.id, estimateNodeSize(label, boxes));
 
     visNodes.push({
       id: node.id,
@@ -346,10 +373,46 @@ export function buildVisData() {
         calendar.enabled
           ? `Dates: ${calendar.formatOffset(metric.ES)} → ${calendar.formatFinish(metric.ES, metric.duration)}`
           : '',
-        criticality != null ? `Critical in ${Math.round(criticality * 100)}% of simulated runs` : ''
+        criticality != null ? `Critical in ${Math.round(criticality * 100)}% of simulated runs` : '',
+        rollup
+          ? `Sub-path: ${fmtPercent(rollup.share)} of the project` +
+            (rollup.criticalShare > 0 ? `, ${fmtPercent(rollup.criticalShare)} of the critical path` : '') +
+            (rollup.progress != null ? ` · ${fmtPercent(rollup.progress / 100)} complete` : '')
+          : ''
       ].filter(Boolean).join('\n')
     });
   });
+
+  // Milestone headers are laid out after the tasks, so each column can be
+  // sized to what is actually in it.
+  if (state.layoutMode === 'milestone') {
+    const { columns } = columnLayout(diagram);
+    (diagram.milestones || []).forEach((ms, i) => {
+      const lane = palette.lanes[i % palette.lanes.length];
+      const column = columns[i];
+      visNodes.push({
+        id: `${LANE_ID_PREFIX}${ms.id}`,
+        label: ms.title,
+        x: column ? column.centre : 0,
+        y: -220,
+        fixed: true,
+        shape: 'box',
+        margin: 10,
+        widthConstraint: { maximum: Math.max(120, (column?.width || 0) - 40) },
+        font: { color: palette.laneText, size: 13, face: 'system-ui, sans-serif', bold: true },
+        color: {
+          background: lane,
+          border: palette.laneBorder,
+          highlight: { background: lane, border: palette.edgeHighlight },
+          hover: { background: lane, border: palette.edgeHighlight }
+        },
+        borderWidth: 1,
+        shadow: false,
+        chosen: false,
+        physics: false
+      });
+    });
+  }
 
   const visEdges = links
     .filter(link => metrics[link.id])
@@ -380,9 +443,7 @@ function rebuildDrawCache() {
     };
   });
 
-  laneCache = state.layoutMode === 'milestone'
-    ? (currentDiagram().milestones || []).map((ms, i) => ({ index: i, title: ms.title }))
-    : [];
+  laneCache = state.layoutMode === 'milestone' ? columnLayout().columns : [];
 }
 
 export function applyVisData() {
@@ -408,17 +469,18 @@ function drawLanes(ctx) {
 
   // Bands are drawn in canvas coordinates so they stay locked to the task
   // columns under pan and zoom. A DOM overlay cannot do this — it drifted out
-  // of alignment as soon as the view moved.
+  // of alignment as soon as the view moved. Each band takes its own column's
+  // width, so a milestone of wide boxes is not clipped by a neighbour's.
   ctx.save();
   ctx.fillStyle = palette.laneBand;
   for (let i = 0; i < count; i += 2) {
-    ctx.fillRect(i * COLUMN_GAP - COLUMN_GAP / 2, -2000, COLUMN_GAP, 4000);
+    ctx.fillRect(laneCache[i].left, -2000, laneCache[i].width, 4000);
   }
   ctx.strokeStyle = palette.laneDivider;
   ctx.lineWidth = 1.5 / scale;
   ctx.setLineDash([6, 6]);
   for (let i = 0; i < count - 1; i++) {
-    const x = i * COLUMN_GAP + COLUMN_GAP / 2;
+    const x = laneCache[i].left + laneCache[i].width;
     ctx.beginPath();
     ctx.moveTo(x, -2000);
     ctx.lineTo(x, 2000);

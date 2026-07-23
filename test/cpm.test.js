@@ -8,10 +8,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  computeCPM, compileGraph, createRollup, nodesOf, baseDuration,
+  computeCPM, compileGraph, createRollup, createProgressRollup, nodesOf, baseDuration,
   wouldCreateCycle, traceFrom, toDependency, predecessorIds,
   indexGraph, scheduleSample
 } from '../js/cpm.js';
+import {
+  computeCpmLayout, orderedNodes, columnGeometry, columnRowHeight, columnRowOrigin
+} from '../js/layout.js';
 import { createDefaultState, normalizeState, captureBaseline } from '../js/state.js';
 import { createCalendar, toISODate, parseISODate } from '../js/calendar.js';
 import { sampleTriangular, percentile, histogram } from '../js/simulate.js';
@@ -281,6 +284,207 @@ test('an empty sub-page leaves the local estimate alone', () => {
     rollup: createRollup(state.diagrams, 'average')
   });
   assert.equal(r.metrics.A.duration, 4);
+});
+
+// ─── Progress roll-up ──────────────────────────────────────
+
+test('sub-page progress is weighted by duration, not by task count', () => {
+  const state = normalizeState({
+    diagrams: {
+      main: { milestones: [] },
+      sub_1: {
+        milestones: [{
+          id: 's', title: 'S', nodes: [
+            task('S1', 10, 10, [], { progress: 100 }),
+            task('S2', 2, 2, [], { progress: 0 })
+          ]
+        }]
+      }
+    }
+  });
+  const progressOf = createProgressRollup(state.diagrams, 'average');
+  // A plain mean would say 50%. Ten of the twelve days are done.
+  assert.equal(progressOf('sub_1'), (10 * 100) / 12);
+});
+
+test('progress recurses through nested sub-pages', () => {
+  const state = normalizeState({
+    diagrams: {
+      main: { milestones: [{ id: 'm', title: 'm', nodes: [task('A', 1, 1, [], { linkedSubPage: 'sub_1' })] }] },
+      sub_1: {
+        milestones: [{
+          id: 's', title: 'S', nodes: [
+            // Its own progress says 0, but the page it stands in for is half done.
+            task('B', 1, 1, [], { progress: 0, linkedSubPage: 'sub_2' })
+          ]
+        }]
+      },
+      sub_2: {
+        milestones: [{
+          id: 's', title: 'S', nodes: [
+            task('C', 4, 4, [], { progress: 100 }),
+            task('D', 4, 4, [], { progress: 0 })
+          ]
+        }]
+      }
+    }
+  });
+  const progressOf = createProgressRollup(state.diagrams, 'average');
+  assert.equal(progressOf('sub_2'), 50);
+  assert.equal(progressOf('sub_1'), 50, 'B reports its sub-page rather than its own 0%');
+});
+
+test('an empty page reports no progress rather than zero progress', () => {
+  const state = normalizeState({
+    diagrams: { main: { milestones: [] }, sub_1: { milestones: [] } }
+  });
+  assert.equal(createProgressRollup(state.diagrams, 'average')('sub_1'), null);
+  assert.equal(createProgressRollup(state.diagrams, 'average')('nope'), null);
+});
+
+test('progress roll-up terminates on a link cycle', () => {
+  const state = normalizeState({
+    diagrams: {
+      main: { milestones: [] },
+      sub_1: { milestones: [{ id: 'm', title: 'm', nodes: [task('B', 2, 2, [], { progress: 40, linkedSubPage: 'sub_2' })] }] },
+      sub_2: { milestones: [{ id: 'm', title: 'm', nodes: [task('C', 2, 2, [], { progress: 60, linkedSubPage: 'sub_1' })] }] }
+    }
+  });
+  const progressOf = createProgressRollup(state.diagrams, 'average');
+  // The cycle resolves to the task's own figure rather than recursing forever.
+  assert.equal(progressOf('sub_1'), 60);
+});
+
+test('zero-duration tasks still count towards progress', () => {
+  const state = normalizeState({
+    diagrams: {
+      main: { milestones: [] },
+      sub_1: {
+        milestones: [{
+          id: 's', title: 'S', nodes: [
+            task('M1', 0, 0, [], { progress: 100 }),
+            task('M2', 0, 0, [], { progress: 0 })
+          ]
+        }]
+      }
+    }
+  });
+  assert.equal(createProgressRollup(state.diagrams, 'average')('sub_1'), 50);
+});
+
+// ─── Layout ────────────────────────────────────────────────
+
+const layoutOf = (nodes, options = {}) => {
+  const graph = compileGraph(nodes);
+  const result = computeCPM(nodes, { mode: 'average', graph });
+  return computeCpmLayout(nodes, { ...result, graph }, options);
+};
+
+test('auto-layout ranks tasks by longest path', () => {
+  // D depends on both A (rank 0) and C (rank 2), so it must sit past C.
+  const nodes = [
+    task('A', 1, 1), task('B', 1, 1, ['A']), task('C', 1, 1, ['B']),
+    task('D', 1, 1, ['A', 'C'])
+  ];
+  const { ranks } = layoutOf(nodes);
+  assert.equal(ranks.get('A'), 0);
+  assert.equal(ranks.get('B'), 1);
+  assert.equal(ranks.get('C'), 2);
+  assert.equal(ranks.get('D'), 3, 'the longest path decides, not the first one found');
+});
+
+test('auto-layout draws the critical path as a straight line', () => {
+  const nodes = [
+    task('A', 4, 4), task('B', 4, 4, ['A']), task('C', 4, 4, ['B']),
+    task('S', 1, 1, ['A']), task('T', 1, 1, ['A'])
+  ];
+  const { positions } = layoutOf(nodes);
+  ['A', 'B', 'C'].forEach(id => {
+    assert.equal(positions[id].y, 0, `${id} is critical and belongs on the centre line`);
+  });
+  assert.notEqual(positions.S.y, 0, 'the slack tasks move off it');
+});
+
+test('auto-layout spaces columns by how wide the tasks actually are', () => {
+  const nodes = [task('A', 1, 1), task('B', 1, 1, ['A'])];
+  const narrow = layoutOf(nodes, { sizeOf: () => ({ width: 60, height: 60 }) });
+  const wide = layoutOf(nodes, { sizeOf: () => ({ width: 400, height: 60 }) });
+  assert.ok(
+    wide.positions.B.x > narrow.positions.B.x + 300,
+    'wider tasks must not be laid out on the pitch of narrow ones'
+  );
+});
+
+test('auto-layout leaves no two tasks on top of each other', () => {
+  const nodes = [
+    task('A', 1, 1),
+    ...['P', 'Q', 'R', 'S'].map(id => task(id, 1, 1, ['A'])),
+    task('Z', 1, 1, ['P', 'Q', 'R', 'S'])
+  ];
+  const size = { width: 100, height: 100 };
+  const { positions } = layoutOf(nodes, { sizeOf: () => size });
+  const points = Object.values(positions);
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      const apart = Math.abs(points[i].x - points[j].x) >= size.width ||
+        Math.abs(points[i].y - points[j].y) >= size.height;
+      assert.ok(apart, `tasks overlap at ${JSON.stringify(points[i])}`);
+    }
+  }
+});
+
+test('auto-layout is deterministic', () => {
+  const build = () => [
+    task('A', 1, 1), task('B', 2, 2, ['A']), task('C', 1, 1, ['A']),
+    task('D', 1, 1, ['B', 'C']), task('E', 3, 3, ['C'])
+  ];
+  assert.deepEqual(layoutOf(build()).positions, layoutOf(build()).positions);
+});
+
+test('auto-layout copes with an empty diagram and with a cycle', () => {
+  assert.deepEqual(computeCpmLayout([], {}).positions, {});
+  const looped = [task('X', 1, 1, ['Y']), task('Y', 1, 1, ['X'])];
+  const { positions } = layoutOf(looped);
+  assert.equal(Object.keys(positions).length, 2, 'every task still gets a place');
+});
+
+// ─── Columns view ──────────────────────────────────────────
+
+test('columns are ordered by earliest start, then float, then id', () => {
+  const nodes = [task('A', 5, 5), task('B', 1, 1), task('C', 1, 1)];
+  const { metrics } = computeCPM(nodes, { mode: 'average' });
+  const milestone = { nodes: [nodes[0], nodes[1], nodes[2]] };
+  metrics.A.ES = 0; metrics.B.ES = 3; metrics.C.ES = 1;
+  assert.deepEqual(orderedNodes(milestone, metrics).map(n => n.id), ['A', 'C', 'B']);
+  assert.deepEqual(milestone.nodes.map(n => n.id), ['A', 'B', 'C'], 'the stored order is untouched');
+});
+
+test('each milestone column is sized to its own widest task', () => {
+  const milestones = [
+    { id: 'm1', nodes: [task('A', 1, 1)] },
+    { id: 'm2', nodes: [task('B', 1, 1)] }
+  ];
+  const sizeOf = id => ({ width: id === 'B' ? 500 : 80, height: 80 });
+  const { columns, totalWidth } = columnGeometry(milestones, sizeOf);
+
+  assert.ok(columns[1].width > columns[0].width, 'the column of wide tasks is wider');
+  assert.ok(columns[0].centre < columns[1].centre, 'columns run left to right');
+  assert.ok(columns[1].left >= columns[0].left + columns[0].width, 'and do not overlap');
+  assert.equal(totalWidth, columns[0].width + columns[1].width);
+});
+
+test('every column starts its rows at the same height', () => {
+  const milestones = [
+    { id: 'm1', nodes: [task('A', 1, 1), task('B', 1, 1), task('C', 1, 1)] },
+    { id: 'm2', nodes: [task('D', 1, 1)] }
+  ];
+  const sizeOf = () => ({ width: 100, height: 100 });
+  const rowHeight = columnRowHeight(milestones, sizeOf);
+  const origin = columnRowOrigin(milestones, rowHeight);
+
+  // The tallest column is centred, and the short one starts on the same row.
+  assert.equal(origin, -rowHeight);
+  assert.ok(rowHeight >= 100, 'rows clear the tallest task on the page');
 });
 
 // ─── Calendar ──────────────────────────────────────────────
