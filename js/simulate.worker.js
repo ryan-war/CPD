@@ -10,7 +10,7 @@ import { compileGraph, indexGraph, scheduleSample } from './cpm.js';
 import { sampleTriangular } from './sampling.js';
 
 self.onmessage = event => {
-  const { nodes, runs, fixed } = event.data;
+  const { nodes, runs, fixed, status } = event.data;
 
   const graph = compileGraph(nodes);
   if (graph.cycleIds.length) {
@@ -48,7 +48,7 @@ self.onmessage = event => {
       task.samples[run] = value;
       durations[task.index] = value;
     }
-    results[run] = scheduleSample(indexed, durations, criticalFlags);
+    results[run] = scheduleSample(indexed, durations, criticalFlags, status);
     for (let i = 0; i < criticalFlags.length; i++) {
       if (criticalFlags[i]) criticalCount[i]++;
     }

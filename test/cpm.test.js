@@ -686,6 +686,169 @@ test('normalize fills in the start constraint and drops junk', () => {
   assert.equal(c.startNoEarlierThan, null);
 });
 
+// ─── Data date: progress drives the schedule ───────────────
+//
+// Without a data date, progress is a decoration and these all reduce to the
+// planned schedule — which the baseline lock above depends on.
+
+const paced = (id, d, progress, deps = []) =>
+  task(id, d, d, deps, { progress });
+
+test('no data date leaves progress out of the schedule entirely', () => {
+  const nodes = [paced('A', 10, 50), paced('B', 5, 0, ['A'])];
+  const r = schedule(nodes);
+  assert.equal(r.metrics.A.EF, 10, 'half-done or not, the plan is the plan');
+  assert.equal(r.projectDuration, 15);
+  assert.equal(r.dataDate, null);
+});
+
+test('unstarted work cannot begin in the past', () => {
+  const nodes = [paced('A', 10, 0), paced('B', 5, 0, ['A'])];
+  const r = schedule(nodes, { dataDate: 5 });
+  assert.equal(r.metrics.A.ES, 5, 'pushed to the reporting date');
+  assert.equal(r.metrics.B.ES, 15);
+  assert.equal(r.projectDuration, 20);
+});
+
+test('work in progress is scheduled from what is left of it', () => {
+  const nodes = [paced('A', 10, 50), paced('B', 5, 0, ['A'])];
+  const r = schedule(nodes, { dataDate: 5 });
+  assert.equal(r.metrics.A.EF, 10, 'five days in, five days left');
+  assert.equal(r.metrics.A.remaining, 5);
+  assert.equal(r.projectDuration, 15, 'exactly on plan');
+});
+
+test('a task that has not kept pace pushes the forecast out', () => {
+  const nodes = [paced('A', 10, 50), paced('B', 5, 0, ['A'])];
+  // Eight days in and still only half done: the five days left now run from
+  // day eight, and the whole project slips by three.
+  const r = schedule(nodes, { dataDate: 8 });
+  assert.equal(r.metrics.A.EF, 13);
+  assert.equal(r.projectDuration, 18);
+  assert.equal(schedule(nodes).projectDuration, 15, 'against a plan of fifteen');
+});
+
+test('finished work stops at the reporting date and stops dragging successors', () => {
+  const nodes = [paced('A', 10, 100), paced('B', 5, 0, ['A'])];
+  const r = schedule(nodes, { dataDate: 3 });
+  assert.equal(r.metrics.A.EF, 3, 'done is done, whatever was planned');
+  assert.equal(r.metrics.A.remaining, 0);
+  assert.equal(r.metrics.B.ES, 3, 'B is free to start now');
+  assert.equal(r.projectDuration, 8);
+});
+
+test('progress ahead of the logic is scheduled and flagged, not thrown', () => {
+  // B reports 40% while A, which must precede it, has not started.
+  const nodes = [paced('A', 10, 0), paced('B', 5, 40, ['A'])];
+  const r = schedule(nodes, { dataDate: 2 });
+  assert.deepEqual(r.outOfSequenceIds, ['B']);
+  assert.equal(r.metrics.B.EF, 5, 'three of its five days remain');
+  assert.equal(r.projectDuration, 12, 'A still governs the finish');
+  assert.deepEqual(schedule(nodes, { dataDate: null }).outOfSequenceIds, [],
+    'and nothing is flagged when nothing is being reported');
+});
+
+test('a linked sub-page lends its progress to the task standing in for it', () => {
+  const diagrams = {
+    main: {
+      milestones: [{
+        id: 'm', title: 'M', nodes: [
+          { id: 'P', title: 'P', min: 0, max: 0, progress: 0, dependencies: [], linkedSubPage: 'sub' }
+        ]
+      }]
+    },
+    sub: {
+      milestones: [{
+        id: 's', title: 'S', nodes: [
+          { id: 'X', title: 'X', min: 10, max: 10, progress: 100, dependencies: [] }
+        ]
+      }]
+    }
+  };
+  const rollup = createRollup(diagrams, 'average');
+  const progressRollup = createProgressRollup(diagrams, 'average');
+  const nodes = nodesOf(diagrams.main);
+
+  // P's own slider says nothing is done; the page it stands for says all of it
+  // is. The page wins, so P is complete and clamps to the reporting date.
+  const r = computeCPM(nodes, { mode: 'average', rollup, progressRollup, dataDate: 4 });
+  assert.equal(r.metrics.P.duration, 10, 'duration still rolls up');
+  assert.equal(r.metrics.P.EF, 4);
+  assert.equal(r.metrics.P.remaining, 0);
+
+  // Without the resolver it falls back to the stored value and is unstarted.
+  const naive = computeCPM(nodes, { mode: 'average', rollup, dataDate: 4 });
+  assert.equal(naive.metrics.P.EF, 14);
+});
+
+test('the indexed scheduler agrees with computeCPM under a data date', () => {
+  const nodes = [
+    paced('A', 10, 50), paced('B', 5, 0, ['A']), paced('C', 4, 100),
+    paced('D', 3, 25, ['C']), paced('E', 2, 0, ['B', 'D'])
+  ];
+  const graph = compileGraph(nodes);
+  const indexed = indexGraph(graph);
+  const durations = new Float64Array(indexed.ids.map(
+    id => nodes.find(n => n.id === id).min
+  ));
+  const progress = new Float64Array(indexed.ids.map(
+    id => nodes.find(n => n.id === id).progress
+  ));
+
+  for (const dataDate of [0, 3, 7, 12]) {
+    const sampled = scheduleSample(indexed, durations, null, { dataDate, progress });
+    const exact = schedule(nodes, { dataDate, graph });
+    assert.ok(Math.abs(sampled - exact.projectDuration) < 1e-9,
+      `data date ${dataDate}: ${sampled} vs ${exact.projectDuration}`);
+  }
+});
+
+test('the indexed scheduler honours start constraints too', () => {
+  const nodes = [task('A', 2, 2), task('B', 2, 2, ['A'], { startNoEarlierThan: 6 })];
+  const graph = compileGraph(nodes);
+  const indexed = indexGraph(graph);
+  const durations = new Float64Array([2, 2]);
+  const notBefore = new Float64Array(indexed.ids.map(
+    id => nodes.find(n => n.id === id).startNoEarlierThan || 0
+  ));
+  assert.equal(scheduleSample(indexed, durations, null, { notBefore }), 8);
+  assert.equal(schedule(nodes).projectDuration, 8, 'and agrees with computeCPM');
+});
+
+test('work already behind the data date is not reported as late', () => {
+  // The forward pass schedules a started task from what is left of it, so the
+  // backward pass has to measure that same shortened span. Measuring the full
+  // planned duration instead demands a start that has already been and gone,
+  // and hands negative float to everything feeding it.
+  const nodes = [
+    paced('A', 3, 100), paced('B', 4, 60, ['A']), paced('C', 5, 20, ['B']),
+    paced('D', 4, 0, ['B']), paced('E', 2.5, 0, ['C', 'D'])
+  ];
+  const r = schedule(nodes, { dataDate: 5 });
+
+  assert.ok(r.metrics.A.slack >= 0, `A float ${r.metrics.A.slack} — finished work is never late`);
+  assert.ok(r.metrics.B.slack >= 0, `B float ${r.metrics.B.slack}`);
+  assert.equal(r.worstSlack, 0, 'nothing in the plan is behind');
+  assert.equal(r.projectDuration, 13.1);
+  assert.deepEqual([...r.criticalIds].sort(), ['A', 'B', 'D', 'E'],
+    'C has made enough progress to drop off the path');
+
+  // LS is derived from the same span the forward pass used, so a task that has
+  // started still reports a self-consistent pair of dates.
+  for (const m of Object.values(r.metrics)) {
+    assert.ok(m.LF - m.LS >= -1e-9, `${m.id}: LS after LF`);
+    assert.ok(Math.abs((m.LF - m.LS) - (m.EF - m.ES)) < 1e-9, `${m.id}: spans disagree`);
+  }
+});
+
+test('normalize fills in the data date and drops junk', () => {
+  const base = () => ({ diagrams: { main: { milestones: [] } } });
+  assert.equal(normalizeState(base()).dataDate, null, 'absent becomes null');
+  assert.equal(normalizeState({ ...base(), dataDate: 6 }).dataDate, 6);
+  assert.equal(normalizeState({ ...base(), dataDate: 'today' }).dataDate, null);
+  assert.equal(normalizeState({ ...base(), dataDate: -2 }).dataDate, null);
+});
+
 // ─── Resources ─────────────────────────────────────────────
 
 const loadOf = (nodes, options) => {

@@ -24,6 +24,7 @@ export function createDefaultState() {
     nodeShape: 'circle',        // 'circle' | 'box' (activity-on-node notation)
     nearCriticalDays: 1,        // slack at or below this is flagged as at-risk
     deadline: null,             // day offset the project must finish by
+    dataDate: null,             // day offset the project is reported as of
     calendar: { ...DEFAULT_CALENDAR },
     baseline: null,             // snapshot for planned-vs-actual comparison
     nodeDisplay: { ...DEFAULT_DISPLAY },
@@ -145,6 +146,10 @@ export function normalizeState(data) {
   // Deadlines are day offsets from the project start, like every other figure
   // in the file. Null means none is set.
   data.deadline = dayOrNull(data.deadline);
+  // The moment the project is reported as of. Null means progress is recorded
+  // but never allowed to move the dates — which is how every file written
+  // before this existed behaves, and must keep behaving.
+  data.dataDate = dayOrNull(data.dataDate);
   data.calendar = normalizeCalendar(data.calendar);
   if (data.baseline && typeof data.baseline !== 'object') data.baseline = null;
   if (!data.pageTitles) data.pageTitles = {};

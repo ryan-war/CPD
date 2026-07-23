@@ -29,6 +29,20 @@ files you keep yourself.
   rather than merely which tasks are critical. A deadline the plan already
   meets is left alone: it would otherwise hand every task float and empty the
   critical path.
+- **Total and free float** — total float is delay before the *project* moves;
+  free float is delay before a *successor* does. Where they disagree the card
+  says so, because a task with ten days of total float and none free has room
+  only by spending someone else's.
+- **Start constraints** — as well as a due date, a task can be held back by
+  something the network does not model: a permit, a delivery, a date someone
+  else owns. A start constraint only ever delays a task, never pulls one in.
+- **Progress that drives the schedule** — set a date the project is *reported
+  as of* and what is left of each task is scheduled from there. Finished work
+  stops at the reporting date, work in progress runs from it with only its
+  remainder ahead, and work not started cannot begin in the past. The headline
+  figure becomes a forecast that moves as the work does rather than the plan it
+  was drawn with. Tasks reporting progress the logic says they could not yet
+  have made are flagged rather than quietly absorbed.
 - **At-risk highlighting** — tasks that are not critical but have little float
   are flagged separately, at a threshold you choose. Schedules slip through
   these far more often than through tasks already known to be critical.
@@ -57,6 +71,9 @@ files you keep yourself.
 
 - **Monte Carlo simulation** — samples each task from a triangular O/M/P
   distribution and reports mean, P50, P80 and P95 durations with a histogram.
+  With a reporting date set it samples what is left of the work rather than
+  what was planned, so a project already under way is simulated as it stands
+  and its spread narrows as the estimates stop being guesses.
   Runs in a worker, so the page stays responsive and the run continues if you
   switch tabs. 20 000 runs on a small project takes about a second.
 - **Criticality index** — how often each task landed on the critical path
@@ -111,6 +128,8 @@ Open the published page, or serve the directory locally (see below).
 | Follow a task's link | `Alt`-click (or `Cmd`-click) it |
 | Assign an owner | **Assigned to** on the task, then **Resources** |
 | Set a deadline | **Settings** for the project, or **Must finish by** on a task |
+| Hold a task back | **Start no earlier than** on the task |
+| Report progress as of a date | **Reported as of** in **Settings** |
 
 ### Keyboard shortcuts
 
@@ -181,6 +200,7 @@ use in a spreadsheet.
   "nodeShape": "circle",         // "circle" | "box"
   "nearCriticalDays": 1,         // slack at or below this is flagged at-risk
   "deadline": null,              // day offset the project must finish by
+  "dataDate": null,              // day offset the project is reported as of
   "calendar": {
     "enabled": false,
     "startDate": "2026-04-13",
@@ -211,6 +231,7 @@ use in a spreadsheet.
               "status": "done",          // not_started | in_progress | blocked | done
               "assignee": "Ada",         // "" for nobody
               "mustFinishBy": null,      // day offset this task is due by
+              "startNoEarlierThan": null,// day offset it cannot start before
               "dependencies": [
                 { "id": "Z", "type": "FS", "lag": 0 }  // FS | SS | FF | SF
               ],
@@ -227,10 +248,14 @@ use in a spreadsheet.
 }
 ```
 
-Deadlines are stored as day offsets from the project start, like every other
-figure in the file. With the calendar switched on the interface shows and reads
-them as dates, converting through the working-day calendar; the stored value
-does not change.
+Deadlines, start constraints, and the reporting date are stored as day offsets
+from the project start, like every other figure in the file. With the calendar
+switched on the interface shows and reads them as dates, converting through the
+working-day calendar; the stored value does not change.
+
+`dataDate` is null in every file written before it existed, and null means the
+schedule ignores progress entirely — which is exactly how those files have
+always behaved.
 
 The workspace is also mirrored into `localStorage` under `cpd.workspace.v1` and
 restored on the next visit, so a closed tab is not a lost project. That copy is

@@ -3,7 +3,9 @@
 import { $, toast } from './dom.js';
 import { getState, setState, normalizeState, seedHistory, pageTitle } from './state.js';
 import { fmt } from './schedule.js';
-import { dependenciesOf, nodesOf, computeCPM, createRollup } from './cpm.js';
+import {
+  dependenciesOf, nodesOf, computeCPM, createRollup, createProgressRollup
+} from './cpm.js';
 import { createCalendar, toISODate } from './calendar.js';
 import { renderFullImage } from './network.js';
 
@@ -94,6 +96,9 @@ function constraintCell(offset, calendar, useDates) {
 export function exportCSV() {
   const state = getState();
   const rollup = createRollup(state.diagrams, state.estimationMode);
+  const progressRollup = state.dataDate != null
+    ? createProgressRollup(state.diagrams, state.estimationMode)
+    : null;
   const calendar = createCalendar(state.calendar);
   const useDates = calendar.enabled;
 
@@ -101,6 +106,7 @@ export function exportCSV() {
     'Page', 'Milestone', 'Task ID', 'Title', 'Description', 'Assigned To',
     'Status', 'Progress %',
     'Optimistic', 'Most Likely', 'Pessimistic', 'Duration',
+    ...(state.dataDate != null ? ['Remaining'] : []),
     'ES', 'EF', 'LS', 'LF', 'Total Float', 'Free Float', 'Critical', 'Late',
     'Start No Earlier Than', 'Must Finish By',
     ...(useDates ? ['Start Date', 'Finish Date'] : []),
@@ -118,7 +124,10 @@ export function exportCSV() {
       mode: state.estimationMode,
       rollup,
       // Only Main answers to the project deadline, exactly as on screen.
-      deadline: pageId === 'main' ? state.deadline : null
+      deadline: pageId === 'main' ? state.deadline : null,
+      // The data date applies everywhere, also exactly as on screen.
+      dataDate: state.dataDate,
+      progressRollup
     });
 
     (diagram.milestones || []).forEach(ms => {
@@ -137,6 +146,7 @@ export function exportCSV() {
           node.likely ?? '',
           node.max,
           fmt(m.duration),
+          ...(state.dataDate != null ? [fmt(m.remaining)] : []),
           fmt(m.ES), fmt(m.EF), fmt(m.LS), fmt(m.LF), fmt(m.slack), fmt(m.freeFloat),
           criticalIds.has(node.id) ? 'yes' : 'no',
           m.slack < 0 ? 'yes' : 'no',

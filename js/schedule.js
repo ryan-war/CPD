@@ -53,7 +53,16 @@ export function schedule() {
   // Only the Main Diagram answers to the project deadline. A sub-path is a
   // component of it, not a project with a delivery date of its own.
   const deadline = state.activeView === 'main' ? state.deadline : null;
-  const result = computeCPM(nodes, { mode, rollup, graph, deadline });
+  // The data date, unlike the deadline, applies to every page. A sub-path has
+  // no delivery date of its own, but it is reported as of the same moment as
+  // everything else. The progress roll-up is only built when it will be read.
+  const dataDate = state.dataDate;
+  const progressRollup = dataDate != null
+    ? createProgressRollup(state.diagrams, mode)
+    : null;
+  const result = computeCPM(nodes, {
+    mode, rollup, graph, deadline, dataDate, progressRollup
+  });
   const calendar = createCalendar(state.calendar);
 
   cached = {
@@ -61,6 +70,7 @@ export function schedule() {
     nodes,
     graph,
     rollup,
+    progressRollup,
     mode,
     calendar,
     deadline,
@@ -93,7 +103,10 @@ export function mainSchedule() {
   const nodes = nodesOf(state.diagrams.main);
   const mode = state.estimationMode;
   const rollup = createRollup(state.diagrams, mode);
-  cachedMain = { ...computeCPM(nodes, { mode, rollup, deadline: state.deadline }), nodes };
+  cachedMain = {
+    ...computeCPM(nodes, { mode, rollup, deadline: state.deadline, dataDate: state.dataDate }),
+    nodes
+  };
   return cachedMain;
 }
 

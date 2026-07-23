@@ -421,7 +421,9 @@ export function renderGantt() {
   }
   panel.classList.add('open');
 
-  const { metrics, projectDuration, criticalIds, nearCritical, nodes, calendar } = schedule();
+  const {
+    metrics, projectDuration, criticalIds, nearCritical, nodes, calendar, dataDate
+  } = schedule();
   if (!nodes.length || projectDuration <= 0) {
     body.innerHTML = '<p class="text-xs text-muted">No schedule to display.</p>';
     $('gantt-scale').textContent = '';
@@ -439,19 +441,38 @@ export function renderGantt() {
     (a, b) => (metrics[a.id].ES - metrics[b.id].ES) || String(a.id).localeCompare(String(b.id))
   );
 
+  // Where "now" falls across the chart, so a bar can be read as behind or ahead
+  // of it rather than merely long.
+  const nowPercent = dataDate != null
+    ? Math.max(0, Math.min(100, (dataDate / projectDuration) * 100))
+    : null;
+  const nowMarker = nowPercent == null
+    ? ''
+    : `<div class="gantt-now" style="left:${nowPercent}%" aria-hidden="true"></div>`;
+
   body.innerHTML = sorted.map(n => {
     const m = metrics[n.id];
     const left = (m.ES / projectDuration) * 100;
-    const width = Math.max(1.5, (m.duration / projectDuration) * 100);
-    const prog = Math.max(0, Math.min(100, Number(n.progress) || 0));
+    // The span the task actually occupies. With a data date these part company
+    // with the planned duration: finished work stops at the reporting date and
+    // work in progress runs from it.
+    const span = Math.max(0, m.EF - m.ES);
+    const width = Math.max(1.5, (span / projectDuration) * 100);
+    // Reported as of a date, the filled portion is the part of the bar already
+    // behind that date — the same thing the schedule itself is saying — rather
+    // than a percentage read off a slider independently of it.
+    const prog = dataDate == null
+      ? Math.max(0, Math.min(100, Number(n.progress) || 0))
+      : span <= 0 ? 100 : Math.max(0, Math.min(100, ((dataDate - m.ES) / span) * 100));
     const crit = criticalIds.has(n.id);
     const near = nearCritical.has(n.id);
     const label = calendar.enabled
-      ? `${calendar.formatOffset(m.ES)} → ${calendar.formatFinish(m.ES, m.duration)}`
+      ? `${calendar.formatOffset(m.ES)} → ${calendar.formatFinish(m.ES, span)}`
       : `${fmt(m.ES)}–${fmt(m.EF)}`;
     return `<div class="gantt-row" data-gantt-for="${escapeHtml(n.id)}">
       <div class="text-[11px] truncate" title="${escapeHtml(n.title)}"><span class="font-semibold ${crit ? 'text-critical' : ''}">${escapeHtml(n.id)}</span> ${escapeHtml(n.title)}</div>
       <div class="gantt-bar-track">
+        ${nowMarker}
         <div class="gantt-bar ${crit ? 'critical' : near ? 'near-critical' : 'normal'}" style="left:${left}%;width:${width}%">
           <div class="prog" style="width:${prog}%"></div>
           <span class="relative z-[1]">${escapeHtml(label)}</span>
@@ -555,7 +576,8 @@ export function renderResources() {
 
 export function renderSummary() {
   const {
-    projectDuration, criticalIds, nearCritical, nodes, graph, calendar, deadline, overrun
+    projectDuration, criticalIds, nearCritical, nodes, graph, calendar, deadline, overrun,
+    dataDate, outOfSequenceIds, metrics
   } = schedule();
   const state = getState();
   const usable = nodes.length && !graph.cycleIds.length;
@@ -596,6 +618,44 @@ export function renderSummary() {
   if (usable && calendar.enabled) {
     $('sum-finish-date').textContent = calendar.formatFinish(0, projectDuration);
   }
+
+  // Reported as of a date, the headline duration is a forecast rather than a
+  // plan, and how complete the work is says whether to believe it.
+  const asOf = $('sum-as-of');
+  asOf.classList.toggle('hidden', !usable || dataDate == null);
+  if (usable && dataDate != null) {
+    $('sum-as-of-date').textContent = calendar.enabled
+      ? calendar.formatOffset(dataDate)
+      : `day ${fmt(dataDate)}`;
+    const complete = completedShare(nodes, metrics);
+    $('sum-as-of-progress').textContent = complete == null
+      ? 'nothing estimated'
+      : `${Math.round(complete * 100)}% complete`;
+  }
+
+  // Tasks reporting progress the network says they could not yet have made.
+  // Usually the logic is wrong, occasionally the progress is; either way it is
+  // the schedule quietly disagreeing with itself and worth saying.
+  const oos = $('sum-out-of-sequence');
+  const flagged = usable && dataDate != null ? (outOfSequenceIds || []) : [];
+  oos.classList.toggle('hidden', !flagged.length);
+  if (flagged.length) $('sum-out-of-sequence-ids').textContent = flagged.join(', ');
+}
+
+/**
+ * How much of the work is behind us, weighted by duration: a ten-day task
+ * counts for ten times a one-day one. Null when there is no work to weigh.
+ */
+function completedShare(nodes, metrics) {
+  let done = 0;
+  let total = 0;
+  nodes.forEach(node => {
+    const m = metrics[node.id];
+    if (!m) return;
+    total += m.duration;
+    done += m.duration - m.remaining;
+  });
+  return total > 0 ? Math.max(0, Math.min(1, done / total)) : null;
 }
 
 /** Six colours were load-bearing with nothing on screen explaining them. */

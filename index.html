@@ -112,6 +112,8 @@
         <span>Critical Tasks: <span id="sum-critical" class="text-critical font-medium">—</span></span>
         <span id="sum-at-risk" class="hidden">At risk: <span id="sum-at-risk-ids" class="text-warning font-medium">—</span></span>
         <span id="sum-deadline" class="hidden">Deadline: <span id="sum-deadline-value" class="value">—</span></span>
+        <span id="sum-as-of" class="hidden">As of <span id="sum-as-of-date" class="value">—</span>: <span id="sum-as-of-progress" class="value">—</span></span>
+        <span id="sum-out-of-sequence" class="hidden text-warning font-medium">Progress ahead of logic: <span id="sum-out-of-sequence-ids">—</span></span>
         <span>Mode: <span id="sum-mode" class="text-info font-medium">Avg</span></span>
         <span id="sum-mc" class="hidden">P50: <span id="sum-p50" class="value">—</span> · P80: <span id="sum-p80" class="text-warning font-medium">—</span> · P95: <span id="sum-p95" class="text-critical font-medium">—</span></span>
         <span class="text-faint hidden lg:inline">Ctrl+Z undo · hover traces dependencies · / search · 1–4 set status</span>
@@ -454,6 +456,11 @@
             <label id="set-deadline-label" for="set-deadline">Project deadline</label>
             <input id="set-deadline" type="number" min="0" step="0.5" placeholder="No deadline" />
             <p id="set-deadline-hint" class="hint">Leave empty for none. A deadline the plan misses turns float negative and reports how late it is.</p>
+          </div>
+          <div class="mt-3">
+            <label id="set-data-date-label" for="set-data-date">Reported as of</label>
+            <input id="set-data-date" type="number" min="0" step="0.5" placeholder="Not tracking" />
+            <p id="set-data-date-hint" class="hint">Leave empty to plan without tracking. Set it and progress drives the dates.</p>
           </div>
           <div class="mt-3">
             <span class="field-label">Working days</span>

@@ -12,7 +12,7 @@ export { sampleTriangular, percentile, histogram };
 /**
  * @returns {Promise<object|null>} null when the graph contains a cycle.
  */
-export function runMonteCarlo({ nodes, rollup, runs, onProgress }) {
+export function runMonteCarlo({ nodes, rollup, runs, onProgress, dataDate, progressRollup }) {
   if (!nodes.length) return Promise.resolve(null);
 
   const graph = compileGraph(nodes);
@@ -29,11 +29,50 @@ export function runMonteCarlo({ nodes, rollup, runs, onProgress }) {
     dependencies: n.dependencies
   }));
 
-  return runInWorker({ nodes: plain, fixed, runs, onProgress })
-    .catch(() => runInline({ nodes, fixed, runs, onProgress }));
+  const status = statusArrays(nodes, { dataDate, progressRollup });
+
+  return runInWorker({ nodes: plain, fixed, runs, onProgress, status })
+    .catch(() => runInline({ nodes, fixed, runs, onProgress, status }));
 }
 
-function runInWorker({ nodes, fixed, runs, onProgress }) {
+/**
+ * The per-task constraint and progress the sampler schedules against, flattened
+ * to arrays indexed like `nodes` — which is also how `compileGraph` indexes
+ * them, so they line up with the typed-array scheduler without a lookup.
+ *
+ * Simulating without these re-rolls work that is already finished and reports
+ * risk on a project that no longer exists: an 80%-done task would draw a fresh
+ * full-width estimate every run rather than the fifth of one still outstanding.
+ */
+function statusArrays(nodes, { dataDate, progressRollup }) {
+  const notBefore = new Float64Array(nodes.length);
+  const progress = new Float64Array(nodes.length);
+  let anyConstraint = false;
+
+  nodes.forEach((n, i) => {
+    const floor = Number(n.startNoEarlierThan);
+    if (Number.isFinite(floor) && floor > 0) {
+      notBefore[i] = floor;
+      anyConstraint = true;
+    }
+    let percent = Number(n.progress) || 0;
+    if (progressRollup && n.linkedSubPage) {
+      const rolled = progressRollup(n.linkedSubPage);
+      if (rolled != null) percent = rolled;
+    }
+    progress[i] = Math.max(0, Math.min(100, percent));
+  });
+
+  const reporting = dataDate == null ? null : Number(dataDate);
+  if (reporting == null && !anyConstraint) return null;
+  return {
+    dataDate: Number.isFinite(reporting) ? reporting : null,
+    notBefore: anyConstraint ? notBefore : null,
+    progress
+  };
+}
+
+function runInWorker({ nodes, fixed, runs, onProgress, status }) {
   return new Promise((resolve, reject) => {
     let worker;
     try {
@@ -81,7 +120,7 @@ function runInWorker({ nodes, fixed, runs, onProgress }) {
       }));
     };
 
-    worker.postMessage({ nodes, runs, fixed });
+    worker.postMessage({ nodes, runs, fixed, status });
   });
 }
 
@@ -89,7 +128,7 @@ function runInWorker({ nodes, fixed, runs, onProgress }) {
  * Fallback path: the same loop on the main thread, sliced across timeouts so
  * the window keeps painting. Slower and pausable by the browser, but correct.
  */
-function runInline({ nodes, fixed, runs, onProgress }) {
+function runInline({ nodes, fixed, runs, onProgress, status }) {
   return new Promise(resolve => {
     const indexed = indexGraph(compileGraph(nodes));
     const durations = new Float64Array(indexed.n);
@@ -124,7 +163,7 @@ function runInline({ nodes, fixed, runs, onProgress }) {
           task.samples[done] = value;
           durations[task.index] = value;
         }
-        results[done] = scheduleSample(indexed, durations, criticalFlags);
+        results[done] = scheduleSample(indexed, durations, criticalFlags, status);
         for (let i = 0; i < criticalFlags.length; i++) {
           if (criticalFlags[i]) criticalCount[i]++;
         }

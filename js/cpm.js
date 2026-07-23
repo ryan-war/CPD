@@ -153,6 +153,43 @@ function clampPercent(value) {
   return Math.max(0, Math.min(100, n));
 }
 
+/**
+ * How a task's dates answer to the data date — the moment the project is
+ * reported as of.
+ *
+ * Without one, progress is a decoration: a plan half-built still forecasts the
+ * finish it was drawn with. With one, what is left of the work drives the dates
+ * and the forecast moves as reality does.
+ *
+ * Three cases, which is how P6 and Project treat retained logic:
+ *
+ *   done         finished by definition, so it cannot still be running past the
+ *                reporting date and cannot push a successor past it either
+ *   in progress  started, so it cannot start later than now, and cannot finish
+ *                before now plus whatever is left of it
+ *   not started  cannot have started in the past
+ *
+ * Returns the adjusted pair plus whether the task reports progress the network
+ * says it could not yet have made — worth surfacing rather than absorbing, as
+ * it usually means the logic or the progress is wrong.
+ */
+function applyDataDate(es, ef, duration, progress, dataDate) {
+  const percent = clampPercent(progress);
+  const outOfSequence = percent > 0 && es > dataDate;
+
+  if (percent >= 100) {
+    const finish = Math.min(ef, dataDate);
+    return { es: Math.min(es, finish), ef: finish, outOfSequence };
+  }
+  if (percent > 0) {
+    const start = Math.min(es, dataDate);
+    const remaining = duration * (1 - percent / 100);
+    return { es: start, ef: Math.max(start, dataDate) + remaining, outOfSequence };
+  }
+  const start = Math.max(es, dataDate);
+  return { es: start, ef: start + duration, outOfSequence };
+}
+
 /** Duration actually used for a task, honouring overrides and roll-up. */
 export function durationOf(node, { mode, overrides, rollup } = {}) {
   if (overrides && overrides[node.id] != null) return overrides[node.id];
@@ -326,11 +363,19 @@ export function indexGraph(graph) {
  *
  * @param {Float64Array} durations indexed like `indexed.ids`
  * @param {Uint8Array} criticalOut set to 1 for tasks with zero float
+ * @param {{dataDate?: number|null, notBefore?: Float64Array,
+ *          progress?: Float64Array}} [status] reporting date and the per-task
+ *   constraint and progress arrays it is read against. Omitted, the sample is
+ *   a plain forward pass over the planned network, exactly as before.
  * @returns {number} project duration for this sample
  */
-export function scheduleSample(indexed, durations, criticalOut) {
+export function scheduleSample(indexed, durations, criticalOut, status) {
   const { order, deps, succs, buffers, n } = indexed;
   const { es, ef, ls, lf } = buffers;
+  const notBefore = status && status.notBefore;
+  const progress = status && status.progress;
+  const dataDate = status && status.dataDate != null ? status.dataDate : null;
+  const hasDataDate = dataDate != null;
   let total = 0;
 
   for (let k = 0; k < order.length; k++) {
@@ -350,14 +395,38 @@ export function scheduleSample(indexed, durations, criticalOut) {
       if (required > start) start = required;
     }
     if (start < 0) start = 0;
+    if (notBefore && notBefore[i] > start) start = notBefore[i];
     es[i] = start;
     ef[i] = start + duration;
+
+    // The same three cases computeCPM applies, inlined: this loop runs tens of
+    // thousands of times and the whole block is skipped when nothing is being
+    // reported as of a date.
+    if (hasDataDate) {
+      const percent = progress ? progress[i] : 0;
+      if (percent >= 100) {
+        const finish = ef[i] < dataDate ? ef[i] : dataDate;
+        ef[i] = finish;
+        if (es[i] > finish) es[i] = finish;
+      } else if (percent > 0) {
+        if (es[i] > dataDate) es[i] = dataDate;
+        const from = es[i] > dataDate ? es[i] : dataDate;
+        ef[i] = from + duration * (1 - percent / 100);
+      } else {
+        if (es[i] < dataDate) es[i] = dataDate;
+        ef[i] = es[i] + duration;
+      }
+    }
+
     if (ef[i] > total) total = ef[i];
   }
 
   for (let k = order.length - 1; k >= 0; k--) {
     const i = order[k];
-    const duration = durations[i];
+    // The span the forward pass actually gave the task, which under a data date
+    // is not its planned duration — measure the same task both ways or float
+    // comes back negative on work that is not late.
+    const span = ef[i] - es[i];
     let finish = Infinity;
     if (succs.start[i] === succs.start[i + 1]) {
       finish = total;
@@ -367,16 +436,16 @@ export function scheduleSample(indexed, durations, criticalOut) {
         const lag = succs.lag[e];
         let allowed;
         switch (succs.type[e]) {
-          case 1: allowed = ls[s] - lag + duration; break;
+          case 1: allowed = ls[s] - lag + span; break;
           case 2: allowed = lf[s] - lag; break;
-          case 3: allowed = lf[s] - lag + duration; break;
+          case 3: allowed = lf[s] - lag + span; break;
           default: allowed = ls[s] - lag;
         }
         if (allowed < finish) finish = allowed;
       }
     }
     lf[i] = finish;
-    ls[i] = finish - duration;
+    ls[i] = finish - span;
   }
 
   if (criticalOut) {
@@ -403,6 +472,8 @@ export function computeCPM(nodes, options = {}) {
       ...n,
       duration: durationOf(n, options),
       ES: 0, EF: 0, LS: 0, LF: 0, slack: 0, freeFloat: 0,
+      remaining: durationOf(n, options),
+      span: durationOf(n, options),
       successors: (graph.succs.get(n.id) || []).map(s => s.id)
     };
   });
@@ -420,9 +491,14 @@ export function computeCPM(nodes, options = {}) {
       worstSlack: 0,
       order: [],
       cycleIds: graph.cycleIds,
-      links
+      links,
+      dataDate: dayOrNull(options.dataDate),
+      outOfSequenceIds: []
     };
   }
+
+  const dataDate = dayOrNull(options.dataDate);
+  const outOfSequenceIds = [];
 
   for (const id of graph.order) {
     const n = metrics[id];
@@ -441,6 +517,31 @@ export function computeCPM(nodes, options = {}) {
     const notBefore = dayOrNull(n.startNoEarlierThan);
     if (notBefore != null && notBefore > n.ES) n.ES = notBefore;
     n.EF = n.ES + n.duration;
+
+    if (dataDate != null) {
+      // A task standing in for a sub-page is as complete as that page is, not
+      // as complete as its own untouched slider says. Same rule the panel
+      // already displays; the schedule now answers to it too.
+      let percent = n.progress;
+      if (options.progressRollup && n.linkedSubPage) {
+        const rolled = options.progressRollup(n.linkedSubPage);
+        if (rolled != null) percent = rolled;
+      }
+      const dated = applyDataDate(n.ES, n.EF, n.duration, percent, dataDate);
+      n.ES = dated.es;
+      n.EF = dated.ef;
+      n.remaining = +(n.EF - Math.max(n.ES, dataDate)).toFixed(4);
+      if (n.remaining < 0) n.remaining = 0;
+      if (dated.outOfSequence) outOfSequenceIds.push(id);
+    } else {
+      n.remaining = n.duration;
+    }
+    // The length the task actually occupies. Under a data date this parts
+    // company with the planned duration — work already done is behind us, and
+    // the backward pass has to measure the same task the forward pass did or
+    // it will demand a start that has already been and gone, and report
+    // negative float on work that is not late at all.
+    n.span = n.EF - n.ES;
   }
 
   let projectDuration = 0;
@@ -464,7 +565,7 @@ export function computeCPM(nodes, options = {}) {
       let finish = Infinity;
       for (const s of succ) {
         const target = metrics[s.id];
-        const allowed = latestFinish(s.type, target.LS, target.LF, s.lag, n.duration);
+        const allowed = latestFinish(s.type, target.LS, target.LF, s.lag, n.span);
         if (allowed < finish) finish = allowed;
       }
       n.LF = finish;
@@ -473,7 +574,7 @@ export function computeCPM(nodes, options = {}) {
     const own = dayOrNull(n.mustFinishBy);
     if (own != null && own < n.LF) n.LF = own;
 
-    n.LS = n.LF - n.duration;
+    n.LS = n.LF - n.span;
     n.slack = +(n.LS - n.ES).toFixed(4);
     if (Math.abs(n.slack) < EPSILON) n.slack = 0;
 
@@ -490,7 +591,7 @@ export function computeCPM(nodes, options = {}) {
     let free = succ.length ? Infinity : limit - n.EF;
     for (const s of succ) {
       const target = metrics[s.id];
-      const gap = linkGap(s.type, n.ES, n.EF, s.lag, target.ES, target.duration);
+      const gap = linkGap(s.type, n.ES, n.EF, s.lag, target.ES, target.span);
       if (gap < free) free = gap;
     }
     n.freeFloat = +free.toFixed(4);
@@ -509,7 +610,8 @@ export function computeCPM(nodes, options = {}) {
 
   return {
     metrics, projectDuration, criticalIds, worstSlack,
-    order: graph.order, cycleIds: [], links
+    order: graph.order, cycleIds: [], links,
+    dataDate, outOfSequenceIds
   };
 }
 

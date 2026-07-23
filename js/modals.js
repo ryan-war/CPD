@@ -456,6 +456,11 @@ export function openSettingsModal() {
     hintText: 'Leave empty for none. A deadline the plan misses turns float negative and reports how late it is.'
   });
 
+  deadlineField($('set-data-date'), $('set-data-date-label'), $('set-data-date-hint'), state.dataDate, {
+    labelText: 'Reported as of',
+    hintText: 'Leave empty to plan without tracking. Set it and progress drives the dates: what is left of each task is scheduled from here, so the forecast moves as the work does.'
+  });
+
   $('set-workdays').innerHTML = WEEKDAY_NAMES.map((name, i) => `
     <label class="workday-chip">
       <input type="checkbox" value="${i}"${cal.workdays.includes(i) ? ' checked' : ''} />
@@ -482,6 +487,7 @@ export function saveSettingsForm(event) {
   // Read the deadline before the calendar changes under it: the field is
   // interpreted against the calendar it was drawn with, not the new one.
   const deadline = readDeadlineField($('set-deadline'));
+  const dataDate = readDeadlineField($('set-data-date'));
 
   state.calendar = {
     enabled: $('set-calendar-enabled').checked,
@@ -490,6 +496,7 @@ export function saveSettingsForm(event) {
     holidays: $('set-holidays').value.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
   };
   state.deadline = deadline;
+  state.dataDate = dataDate;
   state.nearCriticalDays = Math.max(0, Number($('set-near-critical').value) || 0);
   state.nodeShape = $('set-node-shape').value === 'box' ? 'box' : 'circle';
 
@@ -511,7 +518,7 @@ export function closeMonteModal() {
 
 export async function runSimulation() {
   if (simulating) return;
-  const { nodes, rollup, graph } = schedule();
+  const { nodes, rollup, graph, dataDate, progressRollup } = schedule();
 
   if (!nodes.length) {
     toast('No tasks to simulate', 'info');
@@ -537,6 +544,10 @@ export async function runSimulation() {
     nodes,
     rollup,
     runs,
+    // Sampled against what is left of the work, not what was planned, so a
+    // project already under way is simulated as it stands rather than as drawn.
+    dataDate,
+    progressRollup,
     onProgress: fraction => {
       const pct = Math.round(fraction * 100);
       $('mc-progress-bar').style.width = pct + '%';
