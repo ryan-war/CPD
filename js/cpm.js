@@ -240,8 +240,24 @@ function latestFinish(type, succLS, succLF, lag, predDuration) {
  * driving links, and how small it gets across a task's successors, which is
  * that task's free float. One expression so the two cannot drift apart.
  */
-function linkGap(type, predES, predEF, lag, succES, succDuration) {
+export function linkGap(type, predES, predEF, lag, succES, succDuration) {
   return succES - earliestStart(type, predES, predEF, lag, succDuration);
+}
+
+/**
+ * Slack in the relation between two scheduled tasks — how far the predecessor
+ * could move before the successor has to.
+ *
+ * Levelling delays tasks and needs to know how much of a delay each link can
+ * absorb before it has to be passed on. Same measurement as free float, but
+ * per link rather than minimised across a task's successors.
+ */
+export function linkSlack(dep, metrics) {
+  const pred = metrics[dep.id];
+  const succ = metrics[dep.to];
+  if (!pred || !succ) return 0;
+  const span = succ.span != null ? succ.span : succ.duration;
+  return linkGap(dep.type, pred.ES, pred.EF, dep.lag, succ.ES, span);
 }
 
 /**

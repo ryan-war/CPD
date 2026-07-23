@@ -50,6 +50,14 @@ files you keep yourself.
   over the project's timeline, with double-booked stretches marked. The
   schedule says when work *can* run; this says whether anyone is free to run
   it. Capacity is adjustable for people who genuinely do juggle.
+- **Resource levelling** — and then resolve it. Two proposals are offered
+  whenever someone is over-allocated: *within float*, which never moves the end
+  date and reports what it could not fix, and *resolve everything*, which says
+  what clearing the last conflict would cost. Tasks with least float get first
+  claim on whoever is free, so the ones that would move the project are the
+  ones that do not move. Applying writes an ordinary start constraint on each
+  task the resource actually pushed — the rest follow through the logic — so
+  the result is readable, editable, and one step of undo.
 - **Sub-path pages** — link a task to its own diagram; the sub-path's project
   duration rolls up and replaces the parent task's estimate.
 - **Sub-path roll-up figures** — what each linked branch is actually worth:
@@ -127,6 +135,7 @@ Open the published page, or serve the directory locally (see below).
 | Reorder milestones | The arrows in the milestone header |
 | Follow a task's link | `Alt`-click (or `Cmd`-click) it |
 | Assign an owner | **Assigned to** on the task, then **Resources** |
+| Resolve a double-booking | **Resources**, then **Apply** on a levelling option |
 | Set a deadline | **Settings** for the project, or **Must finish by** on a task |
 | Hold a task back | **Start no earlier than** on the task |
 | Report progress as of a date | **Reported as of** in **Settings** |
@@ -273,7 +282,8 @@ js/calendar.js           working-day calendar — pure, no DOM
 js/layout.js             auto-layout and column geometry — pure, no DOM
 js/schedule.js           per-render schedule cache, at-risk set, baseline drift,
                          sub-path roll-up figures
-js/resources.js          assignee load and over-allocation — pure, no DOM
+js/resources.js          assignee load, over-allocation, and levelling — pure,
+                         no DOM
 js/storage.js            autosave to browser storage
 js/sampling.js           distributions and summary statistics
 js/simulate.js           Monte Carlo driver (worker, with inline fallback)

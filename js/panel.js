@@ -8,7 +8,7 @@ import { getState, currentDiagram } from './state.js';
 import { dependenciesOf } from './cpm.js';
 import { linkBadgeHtml } from './links.js';
 import { orderedNodes } from './layout.js';
-import { resourceLoad, UNASSIGNED } from './resources.js';
+import { resourceLoad, levelResources, UNASSIGNED } from './resources.js';
 import { CRITICAL_COLOR, NEAR_CRITICAL_COLOR, LATE_COLOR, STATUS_COLORS, STATUS_LABELS } from './config.js';
 
 let ganttOpen = false;
@@ -46,6 +46,11 @@ export function setResourcesOpen(open) {
 export function setResourceCapacity(value) {
   resourceCapacity = Math.max(1, Math.min(20, Number(value) || 1));
   if (resourcesOpen) renderResources();
+}
+
+/** How many tasks one person is taken to carry at once. */
+export function getResourceCapacity() {
+  return resourceCapacity;
 }
 
 /**
@@ -569,7 +574,80 @@ export function renderResources() {
             : `${fmt(person.busyDays)}d busy`}
         </div>
       </div>`;
-  }).join('');
+  }).join('') + levellingSection(nodes, metrics, projectDuration, calendar, load);
+}
+
+/**
+ * What levelling would cost, offered before it is applied.
+ *
+ * Finding the over-allocation was only ever half the job — the float needed to
+ * fix most of it is already computed. Both proposals are shown together because
+ * the choice between them is the whole question: spend the float, or spend the
+ * end date.
+ */
+function levellingSection(nodes, metrics, projectDuration, calendar, load) {
+  const overloaded = load.filter(p => p.name !== UNASSIGNED && p.overloadedDays > 0);
+  if (!overloaded.length) return '';
+
+  const within = levelResources(nodes, metrics, {
+    capacity: resourceCapacity, mode: 'within-float'
+  });
+  const full = levelResources(nodes, metrics, {
+    capacity: resourceCapacity, mode: 'full'
+  });
+
+  const describe = plan => {
+    if (!plan.delays.size) return 'nothing it can move';
+    return [...plan.delays.entries()]
+      .sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))
+      .map(([id, days]) => `${escapeHtml(id)} by ${fmt(days)}d`)
+      .join(', ');
+  };
+
+  const slip = +(full.projectDuration - projectDuration).toFixed(4);
+
+  return `
+    <div class="level-panel">
+      <p class="level-intro">
+        ${overloaded.map(p => escapeHtml(p.name)).join(', ')}
+        ${overloaded.length === 1 ? 'is' : 'are'} carrying more than
+        ${resourceCapacity === 1 ? 'one task' : `${resourceCapacity} tasks`} at once.
+        Levelling delays tasks so nobody is in two places, tightest float first.
+      </p>
+
+      <div class="level-option">
+        <div>
+          <span class="level-title">Within float</span>
+          <span class="level-detail">${describe(within)}</span>
+          <span class="level-cost ${within.unresolved.length ? 'text-warning' : 'text-success'}">
+            ${within.unresolved.length
+              ? `finishes on time, but ${escapeHtml(within.unresolved.join(', '))} still overlap${within.unresolved.length === 1 ? 's' : ''}`
+              : 'finishes on time, nothing left over'}
+          </span>
+        </div>
+        <button type="button" class="tool-btn" data-level-apply="within-float"
+                ${within.delays.size ? '' : 'disabled'}>Apply</button>
+      </div>
+
+      <div class="level-option">
+        <div>
+          <span class="level-title">Resolve everything</span>
+          <span class="level-detail">${describe(full)}</span>
+          <span class="level-cost ${slip > 0 ? 'text-late' : 'text-success'}">
+            ${slip > 0
+              ? `project finishes ${fmt(slip)}d later${calendar.enabled ? `, on ${escapeHtml(calendar.formatFinish(0, full.projectDuration))}` : ''}`
+              : 'at no cost to the end date'}
+          </span>
+        </div>
+        <button type="button" class="tool-btn" data-level-apply="full"
+                ${full.delays.size ? '' : 'disabled'}>Apply</button>
+      </div>
+
+      <p class="hint">
+        Applying writes a <strong>start no earlier than</strong> on each delayed task,
+        so the result is ordinary constraints you can read, edit, or undo.
+      </p>
+    </div>`;
 }
 
 // ─── Summary and legend ────────────────────────────────────

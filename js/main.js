@@ -23,8 +23,9 @@ import {
 import {
   renderBottomPanel, renderGantt, renderSummary, renderLegend, clearMonteCarloSummary,
   isGanttOpen, setGanttOpen, highlightTasks,
-  renderResources, isResourcesOpen, setResourcesOpen, setResourceCapacity
+  renderResources, isResourcesOpen, setResourcesOpen, setResourceCapacity, getResourceCapacity
 } from './panel.js';
+import { levelResources } from './resources.js';
 import {
   initModals, openNodeModal, closeNodeModal, saveNodeForm, addDependencyRow, removeDependencyRow,
   openEdgeModal, closeEdgeModal, saveEdgeForm, deleteEdge,
@@ -454,6 +455,44 @@ function clearBaseline() {
   onChange('Baseline cleared');
 }
 
+/**
+ * Commit a levelling proposal as ordinary start constraints.
+ *
+ * Writing the delays as `startNoEarlierThan` rather than storing a levelled
+ * schedule of its own means the result is inspectable and editable as any other
+ * constraint, undo is one step, and nothing has to remember that these dates
+ * came from levelling rather than from someone typing them.
+ */
+function applyLevelling(mode) {
+  const { metrics, nodes, graph, projectDuration: before } = schedule();
+  if (graph.cycleIds.length) {
+    toast('Resolve the circular dependency first', 'error');
+    return;
+  }
+
+  const { delays, constrained, projectDuration, unresolved } = levelResources(nodes, metrics, {
+    capacity: getResourceCapacity(),
+    mode
+  });
+  if (!delays.size) {
+    toast('Nothing to level', 'info');
+    return;
+  }
+
+  // Only the tasks the resource pushed get a constraint. Their successors move
+  // because the logic says they must, which is already written down.
+  constrained.forEach(id => {
+    const found = findNode(id);
+    if (found) found.node.startNoEarlierThan = +(metrics[id].ES + delays.get(id)).toFixed(4);
+  });
+
+  const moved = `${delays.size} task${delays.size === 1 ? '' : 's'}`;
+  const slip = +(projectDuration - before).toFixed(4);
+  onChange(unresolved.length
+    ? `Levelled ${moved}; ${unresolved.join(', ')} could not be separated within their float`
+    : `Levelled ${moved}${slip > 0 ? `, finishing ${slip}d later` : ''}`);
+}
+
 // ─── Wiring ────────────────────────────────────────────────
 
 function wireToolbar() {
@@ -468,6 +507,12 @@ function wireToolbar() {
   $('btn-gantt').addEventListener('click', () => setGanttOpen(!isGanttOpen()));
   $('btn-resources').addEventListener('click', () => setResourcesOpen(!isResourcesOpen()));
   $('resource-capacity').addEventListener('change', event => setResourceCapacity(event.target.value));
+  // The panel is rebuilt on every render, so the Apply buttons are reached by
+  // delegation rather than rebound each time.
+  $('resource-body').addEventListener('click', event => {
+    const button = event.target.closest('[data-level-apply]');
+    if (button) applyLevelling(button.dataset.levelApply);
+  });
   $('btn-monte').addEventListener('click', openMonteModal);
   $('btn-save').addEventListener('click', saveJSON);
   $('btn-export-png').addEventListener('click', exportPNG);

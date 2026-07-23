@@ -16,7 +16,7 @@ import {
   computeCpmLayout, orderedNodes, columnGeometry, columnRowHeight, columnRowOrigin,
   freeSpotNear
 } from '../js/layout.js';
-import { resourceLoad, assigneeNames } from '../js/resources.js';
+import { resourceLoad, assigneeNames, levelResources } from '../js/resources.js';
 import { createDefaultState, normalizeState, captureBaseline } from '../js/state.js';
 import { createCalendar, toISODate, parseISODate } from '../js/calendar.js';
 import { sampleTriangular, percentile, histogram } from '../js/simulate.js';
@@ -923,6 +923,145 @@ test('assignee names are collected across every page', () => {
     }
   });
   assert.deepEqual(assigneeNames(state.diagrams), ['Ada', 'Sam']);
+});
+
+// ─── Levelling ─────────────────────────────────────────────
+
+const levelOf = (nodes, options) => {
+  const { metrics } = computeCPM(nodes, { mode: 'average' });
+  return levelResources(nodes, metrics, options);
+};
+
+const owned = (id, d, who, deps = []) => task(id, d, d, deps, { assignee: who });
+
+test('one person cannot run two tasks at once', () => {
+  // A and B are independent, both Ada's, both four days from day zero.
+  const nodes = [owned('A', 4, 'Ada'), owned('B', 4, 'Ada')];
+  const full = levelOf(nodes, { mode: 'full' });
+  assert.equal(full.delays.size, 1, 'one of them moves, not both');
+  assert.equal([...full.delays.values()][0], 4, 'to just after the other');
+  assert.equal(full.projectDuration, 8);
+});
+
+test('levelling spends float before it spends the project', () => {
+  // X sets a ten-day project. A and B are both Ada's and both overlap, but the
+  // branch has room, so serialising them costs nothing.
+  const nodes = [
+    task('X', 10, 10), owned('A', 3, 'Ada'), owned('B', 3, 'Ada'),
+    task('E', 1, 1, ['A', 'B', 'X'])
+  ];
+  const within = levelOf(nodes, { mode: 'within-float' });
+  assert.equal(within.projectDuration, 11, 'unchanged');
+  assert.deepEqual(within.unresolved, [], 'and nothing left over');
+  assert.equal([...within.delays.values()].reduce((a, b) => a + b, 0), 3, 'one of them shifts by three');
+});
+
+test('within-float mode never pushes the project out', () => {
+  // Three of Ada's tasks all wanting the same four days, against a project of
+  // six: there is not enough float to separate them.
+  const nodes = [
+    task('X', 6, 6), owned('A', 4, 'Ada'), owned('B', 4, 'Ada'), owned('C', 4, 'Ada')
+  ];
+  const planned = computeCPM(nodes, { mode: 'average' }).projectDuration;
+  const within = levelOf(nodes, { mode: 'within-float' });
+  assert.ok(within.projectDuration <= planned + 1e-9,
+    `${within.projectDuration} > ${planned}`);
+  assert.ok(within.unresolved.length, 'and it says what it could not fix');
+
+  const full = levelOf(nodes, { mode: 'full' });
+  assert.equal(full.projectDuration, 12, 'full mode serialises all three');
+  assert.deepEqual(full.unresolved, [], 'at the cost of six days');
+});
+
+test('levelling never violates precedence', () => {
+  const nodes = [
+    owned('A', 3, 'Ada'), owned('B', 2, 'Ada', ['A']),
+    owned('C', 2, 'Ada'), owned('D', 3, 'Bob', ['C'])
+  ];
+  const { metrics } = computeCPM(nodes, { mode: 'average' });
+  const { delays } = levelResources(nodes, metrics, { mode: 'full' });
+  const startOf = id => metrics[id].ES + (delays.get(id) || 0);
+  const finishOf = id => metrics[id].EF + (delays.get(id) || 0);
+
+  assert.ok(startOf('B') >= finishOf('A') - 1e-9, 'B still follows A');
+  assert.ok(startOf('D') >= finishOf('C') - 1e-9, 'D still follows C');
+});
+
+test('levelling leaves nobody double-booked in full mode', () => {
+  const nodes = [
+    owned('A', 4, 'Ada'), owned('B', 3, 'Ada'), owned('C', 2, 'Ada'),
+    owned('D', 5, 'Bob'), owned('E', 2, 'Bob')
+  ];
+  const { metrics } = computeCPM(nodes, { mode: 'average' });
+  const { delays } = levelResources(nodes, metrics, { mode: 'full' });
+
+  const shifted = nodes.map(n => ({ ...n }));
+  const moved = {};
+  Object.values(metrics).forEach(m => {
+    const delay = delays.get(m.id) || 0;
+    moved[m.id] = { ...m, ES: m.ES + delay, EF: m.EF + delay };
+  });
+  resourceLoad(shifted, moved, { capacity: 1 }).forEach(person => {
+    if (person.name === '') return;
+    assert.equal(person.overloadedDays, 0, `${person.name} is still double-booked`);
+  });
+});
+
+test('capacity leaves an overlap alone when the person can carry it', () => {
+  const nodes = [owned('A', 4, 'Ada'), owned('B', 4, 'Ada')];
+  assert.equal(levelOf(nodes, { capacity: 2, mode: 'full' }).delays.size, 0);
+});
+
+test('unassigned tasks are never levelled', () => {
+  const nodes = [task('A', 4, 4), task('B', 4, 4), task('C', 4, 4)];
+  assert.equal(levelOf(nodes, { mode: 'full' }).delays.size, 0,
+    'the pool is a to-do list, not a person');
+});
+
+test('a project with no conflicts proposes nothing', () => {
+  const nodes = [owned('A', 3, 'Ada'), owned('B', 3, 'Ada', ['A']), owned('C', 3, 'Bob')];
+  for (const mode of ['within-float', 'full']) {
+    const r = levelOf(nodes, { mode });
+    assert.equal(r.delays.size, 0, mode);
+    assert.deepEqual(r.unresolved, [], mode);
+  }
+});
+
+test('only the task the resource pushed needs writing down', () => {
+  // A and B collide on Ada. A is critical so it keeps its slot; B has float,
+  // gives way, and its successor C moves with it. C moves because the logic
+  // says so, not because anyone is double-booked, so constraining C would
+  // restate what the link already enforces.
+  const nodes = [
+    owned('A', 4, 'Ada'), task('A2', 6, 6, ['A']),
+    owned('B', 4, 'Ada'), task('C', 2, 2, ['B'])
+  ];
+  const r = levelOf(nodes, { mode: 'full' });
+  assert.ok(r.delays.has('B') && r.delays.has('C'), 'both move');
+  assert.deepEqual(r.constrained, ['B'], 'but only B was pushed');
+});
+
+test('levelling is deterministic', () => {
+  const nodes = [
+    owned('A', 3, 'Ada'), owned('B', 3, 'Ada'), owned('C', 3, 'Ada'),
+    owned('D', 2, 'Bob'), owned('E', 2, 'Bob'), task('F', 9, 9)
+  ];
+  const first = levelOf(nodes, { mode: 'full' });
+  const second = levelOf(nodes, { mode: 'full' });
+  assert.deepEqual([...first.delays].sort(), [...second.delays].sort());
+  assert.equal(first.projectDuration, second.projectDuration);
+});
+
+test('levelling gives the tightest task first claim on the person', () => {
+  // A is critical, B has a fortnight of float, and both are Ada's from day
+  // zero. The one that would move the project should not be the one that moves.
+  const nodes = [
+    owned('A', 5, 'Ada'), task('A2', 10, 10, ['A']),
+    owned('B', 5, 'Ada')
+  ];
+  const { delays } = levelOf(nodes, { mode: 'full' });
+  assert.equal(delays.get('A'), undefined, 'the critical task stays put');
+  assert.equal(delays.get('B'), 5, 'the one with float gives way');
 });
 
 // ─── Calendar ──────────────────────────────────────────────

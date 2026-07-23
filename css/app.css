@@ -779,6 +779,43 @@ body.compact-toolbar .tab-group { padding-left: 0.125rem; }
 }
 .resource-verdict { font-size: 10px; text-align: right; font-variant-numeric: tabular-nums; }
 
+/* Levelling proposals, offered under the load chart they answer to. */
+.level-panel {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.level-intro {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.level-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+.level-option + .level-option { margin-top: 6px; }
+.level-option > div { min-width: 0; }
+.level-title {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+}
+.level-detail,
+.level-cost {
+  display: block;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.level-detail { color: var(--text-muted); }
+.level-option button { flex-shrink: 0; }
+
 /* ─── Columns (swimlane) view ─────────────────────────────── */
 
 /* The grid scrolls as one, so that the rows stay aligned across columns —
