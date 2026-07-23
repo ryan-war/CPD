@@ -202,6 +202,7 @@ export function normalizeState(data) {
         });
         n.dependencies = [...byPredecessor.values()];
         n.mustFinishBy = dayOrNull(n.mustFinishBy);
+        n.startNoEarlierThan = dayOrNull(n.startNoEarlierThan);
         n.assignee = String(n.assignee || '').trim();
         if (!n.position || typeof n.position !== 'object') n.position = { x: 0, y: 0 };
         n.position = { x: numberOr(n.position.x, 0), y: numberOr(n.position.y, 0) };

@@ -541,6 +541,151 @@ test('an unset or malformed deadline is ignored', () => {
   }
 });
 
+// ─── Free float ────────────────────────────────────────────
+//
+// Total float measures delay before the project moves; free float measures
+// delay before a successor does. The pair only earns its keep where they
+// disagree, so most of these check exactly that.
+
+test('free float is spent by the first task in a slack chain, not the last', () => {
+  // X is a long parallel path. A → B has six days of total float against it,
+  // but A cannot use any without moving B.
+  const nodes = [
+    task('X', 10, 10), task('A', 2, 2), task('B', 2, 2, ['A']),
+    task('E', 1, 1, ['B', 'X'])
+  ];
+  const r = schedule(nodes);
+  assert.equal(r.metrics.A.slack, 6);
+  assert.equal(r.metrics.A.freeFloat, 0, 'A delays B immediately');
+  assert.equal(r.metrics.B.slack, 6);
+  assert.equal(r.metrics.B.freeFloat, 6, 'B absorbs the whole chain');
+});
+
+test('a lone slack branch has free float equal to its total float', () => {
+  const nodes = [
+    task('A', 2, 2), task('B', 2, 2, ['A']), task('C', 6, 6, ['A']),
+    task('D', 1, 1, ['B', 'C'])
+  ];
+  const r = schedule(nodes);
+  assert.equal(r.metrics.B.slack, 4);
+  assert.equal(r.metrics.B.freeFloat, 4);
+});
+
+test('free float never exceeds total float', () => {
+  const nodes = [
+    task('A', 3, 3), task('B', 2, 2, ['A']), task('C', 5, 5, ['A']),
+    task('D', 1, 1, ['B']), task('E', 2, 2, ['C', 'D']), task('F', 4, 4, ['A']),
+    task('G', 1, 1, ['E', 'F'])
+  ];
+  const r = schedule(nodes);
+  for (const m of Object.values(r.metrics)) {
+    assert.ok(m.freeFloat <= m.slack + 1e-9, `${m.id}: free ${m.freeFloat} > total ${m.slack}`);
+  }
+});
+
+test('free float reads through every relation type', () => {
+  for (const type of ['FS', 'SS', 'FF', 'SF']) {
+    // P holds A off day zero. Without it, SF would compute a start before the
+    // project origin, the clamp would hold B at day zero instead, and A would
+    // be reported with float the relation has nothing to do with.
+    const nodes = [
+      task('P', 5, 5),
+      task('A', 2, 2, ['P']),
+      task('B', 2, 2, [], { dependencies: [{ id: 'A', type, lag: 0 }] }),
+      task('X', 20, 20)
+    ];
+    const r = schedule(nodes);
+    // Whatever the relation demands, B sits exactly where it demands, so A has
+    // no room to move before B does.
+    assert.equal(r.metrics.A.freeFloat, 0, type);
+  }
+});
+
+test('a terminal task takes its free float from the project finish', () => {
+  const nodes = [task('A', 10, 10), task('B', 4, 4)];
+  assert.equal(schedule(nodes).metrics.B.freeFloat, 6, 'B runs into the finish');
+  assert.equal(schedule(nodes).metrics.A.freeFloat, 0, 'A sets it');
+
+  // A deadline the plan misses pulls the finish in, and a terminal task's free
+  // float goes negative with its total float rather than staying stubbornly
+  // positive. B is not the late one here — it lands on day 4 against a day-8
+  // demand and keeps its slack. A is.
+  const tight = schedule(nodes, { deadline: 8 });
+  assert.equal(tight.metrics.A.freeFloat, -2, 'two days past what is allowed');
+  assert.equal(tight.metrics.A.slack, -2, 'and it agrees with total float');
+  assert.equal(tight.metrics.B.freeFloat, 4, 'the short branch is still fine');
+});
+
+// ─── Start constraints ─────────────────────────────────────
+
+test('start-no-earlier-than delays a task and its successors', () => {
+  const nodes = [
+    task('A', 2, 2), task('B', 2, 2, ['A'], { startNoEarlierThan: 5 }),
+    task('C', 1, 1, ['B'])
+  ];
+  const r = schedule(nodes);
+  assert.equal(r.metrics.B.ES, 5, 'held back past what the logic allows');
+  assert.equal(r.metrics.C.ES, 7, 'and the delay carries downstream');
+  assert.equal(r.projectDuration, 8);
+});
+
+test('a start constraint earlier than the logic allows changes nothing', () => {
+  const nodes = [task('A', 2, 2), task('B', 2, 2, ['A'], { startNoEarlierThan: 1 })];
+  const constrained = schedule(nodes).metrics.B;
+  const plain = schedule([task('A', 2, 2), task('B', 2, 2, ['A'])]).metrics.B;
+  assert.equal(constrained.ES, 2, 'a floor, never a ceiling');
+  for (const key of ['ES', 'EF', 'LS', 'LF', 'slack', 'freeFloat']) {
+    assert.equal(constrained[key], plain[key], key);
+  }
+});
+
+test('a start constraint hands float to the path feeding it', () => {
+  const nodes = [
+    task('A', 2, 2), task('B', 4, 4, ['A'], { startNoEarlierThan: 6 })
+  ];
+  const r = schedule(nodes);
+  assert.equal(r.metrics.A.slack, 4, 'A can drift up to the constraint');
+  assert.equal(r.metrics.A.freeFloat, 4);
+  assert.equal(r.metrics.B.slack, 0);
+});
+
+test('a start constraint against a due date yields negative float, not an error', () => {
+  const nodes = [
+    task('A', 4, 4, [], { startNoEarlierThan: 5, mustFinishBy: 6 })
+  ];
+  const r = schedule(nodes);
+  assert.equal(r.metrics.A.ES, 5);
+  assert.equal(r.metrics.A.EF, 9);
+  assert.equal(r.metrics.A.slack, -3, 'three days of it cannot be met');
+});
+
+test('an unset or malformed start constraint is ignored', () => {
+  for (const value of [null, undefined, NaN, 'monday', -3]) {
+    const r = schedule([task('A', 2, 2), task('B', 2, 2, ['A'], { startNoEarlierThan: value })]);
+    assert.equal(r.metrics.B.ES, 2, String(value));
+  }
+});
+
+test('normalize fills in the start constraint and drops junk', () => {
+  const data = normalizeState({
+    diagrams: {
+      main: {
+        milestones: [{
+          id: 'm', title: 'M', nodes: [
+            { id: 'A', min: 1, max: 1 },
+            { id: 'B', min: 1, max: 1, startNoEarlierThan: 4 },
+            { id: 'C', min: 1, max: 1, startNoEarlierThan: 'soon' }
+          ]
+        }]
+      }
+    }
+  });
+  const [a, b, c] = data.diagrams.main.milestones[0].nodes;
+  assert.equal(a.startNoEarlierThan, null, 'absent becomes null, not zero');
+  assert.equal(b.startNoEarlierThan, 4);
+  assert.equal(c.startNoEarlierThan, null);
+});
+
 // ─── Resources ─────────────────────────────────────────────
 
 const loadOf = (nodes, options) => {

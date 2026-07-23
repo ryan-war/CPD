@@ -229,6 +229,12 @@ function newTask(id, x, y) {
     max: 2,
     progress: 0,
     status: 'not_started',
+    // Spelled out rather than left undefined: normalizeState only runs on load,
+    // so a task created here would otherwise reach the saved file missing keys
+    // the documented format says it carries.
+    assignee: '',
+    mustFinishBy: null,
+    startNoEarlierThan: null,
     dependencies: [],
     position: { x, y },
     linkedSubPage: null,

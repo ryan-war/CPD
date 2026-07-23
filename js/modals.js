@@ -143,6 +143,11 @@ export function openNodeModal(nodeId) {
     hintText: 'Leave empty for none. Missing it shows negative float.'
   });
 
+  deadlineField($('edit-snet'), $('edit-snet-label'), $('edit-snet-hint'), node.startNoEarlierThan, {
+    labelText: 'Start no earlier than',
+    hintText: 'Leave empty for none. Holds the task back for something the network does not model — a permit, a delivery. It can only delay a task, never pull one in, and the paths feeding it may show float or go negative as a result.'
+  });
+
   populateLinkedSelect(getState().activeView === 'main'
     ? (node.linkedSubPage || '')
     : (node.linkedMainNode || ''));
@@ -237,6 +242,7 @@ export function saveNodeForm(event) {
   if (node.status === 'done') node.progress = 100;
   node.assignee = $('edit-assignee').value.trim();
   node.mustFinishBy = readDeadlineField($('edit-due'));
+  node.startNoEarlierThan = readDeadlineField($('edit-snet'));
   node.dependencies = dependencies.map(toDependency);
 
   const linkValue = $('edit-linked').value || null;

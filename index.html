@@ -310,6 +310,14 @@
           </div>
         </div>
 
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label id="edit-snet-label" for="edit-snet">Start no earlier than</label>
+            <input id="edit-snet" type="number" min="0" step="0.5" placeholder="No constraint" />
+            <p id="edit-snet-hint" class="hint">Leave empty for none. Holds the task back for something the network does not model.</p>
+          </div>
+        </div>
+
         <fieldset class="fieldset">
           <legend>Predecessors</legend>
           <div id="edit-deps" class="space-y-1.5"></div>

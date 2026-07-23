@@ -67,12 +67,36 @@ export function highlightTasks(ids, { scrollIntoView = true } = {}) {
   }
 }
 
+/** A day offset as the user set it: a date when the calendar is on, else a day. */
+function offsetLabel(offset, calendar) {
+  if (offset == null) return '';
+  return calendar.enabled ? calendar.formatOffset(offset) : `day ${fmt(offset)}`;
+}
+
 /** A deadline as the user set it: a date when the calendar is on, else a day. */
 export function dueLabel(node, calendar) {
-  if (node.mustFinishBy == null) return '';
-  return calendar.enabled
-    ? calendar.formatOffset(node.mustFinishBy)
-    : `day ${fmt(node.mustFinishBy)}`;
+  return offsetLabel(node.mustFinishBy, calendar);
+}
+
+/**
+ * The float tile's tooltip: both floats, and any constraint behind them.
+ *
+ * Total float is delay before the project moves, free float delay before a
+ * successor does. Where they disagree the card shows it, but the reason — a
+ * date someone set — only fits here.
+ */
+function floatTitle(node, m, calendar) {
+  const parts = [
+    `Total float ${fmt(m.slack)}d — delay before the project moves`,
+    `Free float ${fmt(m.freeFloat)}d — delay before a successor moves`
+  ];
+  if (node.startNoEarlierThan != null) {
+    parts.push(`Starts no earlier than ${offsetLabel(node.startNoEarlierThan, calendar)}`);
+  }
+  if (node.mustFinishBy != null) {
+    parts.push(`Due by ${offsetLabel(node.mustFinishBy, calendar)}`);
+  }
+  return parts.join('\n');
 }
 
 function statusChip(node) {
@@ -196,9 +220,12 @@ function taskCardHtml(node, ctx) {
             : `${fmt(m.ES)} / ${fmt(m.EF)}`}</div>
         </div>
         <div class="stat-tile ${isLate ? 'stat-late' : isCrit ? 'stat-critical' : isNear ? 'stat-near-critical' : ''}"
-             ${node.mustFinishBy != null ? `title="Due by ${escapeHtml(dueLabel(node, calendar))}"` : ''}>
+             title="${escapeHtml(floatTitle(node, m, calendar))}">
           <div class="text-muted">${isLate ? 'Float' : 'Slack'}</div>
-          <div>${fmt(m.slack)}d${isLate ? ' · LATE' : isCrit ? ' · CRITICAL' : isNear ? ' · AT RISK' : ''}</div>
+          <div>${fmt(m.slack)}d${isLate ? ' · LATE' : isCrit ? ' · CRITICAL' : isNear ? ' · AT RISK'
+            // Room that cannot be taken without moving a successor is worth
+            // saying out loud; equal figures are the common case and noise.
+            : m.freeFloat !== m.slack ? ` · ${fmt(m.freeFloat)}d free` : ''}</div>
         </div>
       </div>
 

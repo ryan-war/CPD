@@ -196,6 +196,18 @@ function latestFinish(type, succLS, succLF, lag, predDuration) {
 }
 
 /**
+ * Slack in one relation: how much later than the relation demands the successor
+ * actually starts. Zero means the link is binding.
+ *
+ * Both readings of this number are used — whether it is zero, to colour the
+ * driving links, and how small it gets across a task's successors, which is
+ * that task's free float. One expression so the two cannot drift apart.
+ */
+function linkGap(type, predES, predEF, lag, succES, succDuration) {
+  return succES - earliestStart(type, predES, predEF, lag, succDuration);
+}
+
+/**
  * Is this relation binding — driving the successor's start rather than having
  * float in it? Used to colour the critical links.
  */
@@ -203,8 +215,7 @@ export function isDrivingLink(dep, metrics) {
   const pred = metrics[dep.id];
   const succ = metrics[dep.to];
   if (!pred || !succ) return false;
-  const required = earliestStart(dep.type, pred.ES, pred.EF, dep.lag, succ.duration);
-  return Math.abs(succ.ES - required) < 1e-6;
+  return Math.abs(linkGap(dep.type, pred.ES, pred.EF, dep.lag, succ.ES, succ.duration)) < 1e-6;
 }
 
 /**
@@ -391,7 +402,7 @@ export function computeCPM(nodes, options = {}) {
     metrics[n.id] = {
       ...n,
       duration: durationOf(n, options),
-      ES: 0, EF: 0, LS: 0, LF: 0, slack: 0,
+      ES: 0, EF: 0, LS: 0, LF: 0, slack: 0, freeFloat: 0,
       successors: (graph.succs.get(n.id) || []).map(s => s.id)
     };
   });
@@ -424,6 +435,11 @@ export function computeCPM(nodes, options = {}) {
     // A lead (negative lag) on the first task could pull the schedule before
     // day zero; the project cannot start before its own origin.
     n.ES = Math.max(0, start);
+    // A task can be held back by something the network does not model — a
+    // permit, a delivery, a date someone else owns. The constraint is a floor
+    // on the start, never a ceiling: it can delay a task but not pull one in.
+    const notBefore = dayOrNull(n.startNoEarlierThan);
+    if (notBefore != null && notBefore > n.ES) n.ES = notBefore;
     n.EF = n.ES + n.duration;
   }
 
@@ -460,6 +476,25 @@ export function computeCPM(nodes, options = {}) {
     n.LS = n.LF - n.duration;
     n.slack = +(n.LS - n.ES).toFixed(4);
     if (Math.abs(n.slack) < EPSILON) n.slack = 0;
+
+    // Free float: delay available before *a successor* moves, as against total
+    // float, which measures delay before the *project* moves. The difference is
+    // the useful one — a task with ten days of total float and none free has
+    // room only by spending someone else's.
+    //
+    // A delay shifts ES and EF together by the same amount, so the minimum gap
+    // across the successors is the answer for all four relation types alike.
+    // With no successors the task runs into the project finish, which a missed
+    // deadline pulls in, so free float goes negative there exactly as total
+    // float does.
+    let free = succ.length ? Infinity : limit - n.EF;
+    for (const s of succ) {
+      const target = metrics[s.id];
+      const gap = linkGap(s.type, n.ES, n.EF, s.lag, target.ES, target.duration);
+      if (gap < free) free = gap;
+    }
+    n.freeFloat = +free.toFixed(4);
+    if (Math.abs(n.freeFloat) < EPSILON) n.freeFloat = 0;
   }
 
   // Zero float is critical; negative float is critical *and* already late.

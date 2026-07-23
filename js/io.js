@@ -85,6 +85,12 @@ function csvRows(rows) {
  * Every task on every page, with its computed schedule. Each page is costed
  * with its own roll-up so sub-path figures match what the interface shows.
  */
+/** A constraint offset for a spreadsheet: a date if the calendar is on, else a day. */
+function constraintCell(offset, calendar, useDates) {
+  if (offset == null) return '';
+  return useDates ? toISODate(calendar.offsetToDate(offset)) : fmt(offset);
+}
+
 export function exportCSV() {
   const state = getState();
   const rollup = createRollup(state.diagrams, state.estimationMode);
@@ -95,7 +101,8 @@ export function exportCSV() {
     'Page', 'Milestone', 'Task ID', 'Title', 'Description', 'Assigned To',
     'Status', 'Progress %',
     'Optimistic', 'Most Likely', 'Pessimistic', 'Duration',
-    'ES', 'EF', 'LS', 'LF', 'Slack', 'Critical', 'Late', 'Must Finish By',
+    'ES', 'EF', 'LS', 'LF', 'Total Float', 'Free Float', 'Critical', 'Late',
+    'Start No Earlier Than', 'Must Finish By',
     ...(useDates ? ['Start Date', 'Finish Date'] : []),
     'Predecessors', 'Linked Sub-Page', 'Linked Main Task'
   ];
@@ -130,12 +137,11 @@ export function exportCSV() {
           node.likely ?? '',
           node.max,
           fmt(m.duration),
-          fmt(m.ES), fmt(m.EF), fmt(m.LS), fmt(m.LF), fmt(m.slack),
+          fmt(m.ES), fmt(m.EF), fmt(m.LS), fmt(m.LF), fmt(m.slack), fmt(m.freeFloat),
           criticalIds.has(node.id) ? 'yes' : 'no',
           m.slack < 0 ? 'yes' : 'no',
-          node.mustFinishBy == null
-            ? ''
-            : (useDates ? toISODate(calendar.offsetToDate(node.mustFinishBy)) : fmt(node.mustFinishBy)),
+          constraintCell(node.startNoEarlierThan, calendar, useDates),
+          constraintCell(node.mustFinishBy, calendar, useDates),
           ...(useDates
             ? [toISODate(calendar.offsetToDate(m.ES)), toISODate(calendar.finishDate(m.ES, m.duration))]
             : []),
