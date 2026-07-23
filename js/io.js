@@ -1,13 +1,15 @@
 // Project import/export, image export, and CSV export.
 
 import { $, toast } from './dom.js';
+import { APP_VERSION, SCHEMA_VERSION } from './config.js';
 import { getState, setState, normalizeState, seedHistory, pageTitle } from './state.js';
 import { fmt } from './schedule.js';
 import {
   dependenciesOf, nodesOf, computeCPM, createRollup, createProgressRollup
 } from './cpm.js';
 import { createCalendar, toISODate } from './calendar.js';
-import { renderFullImage } from './network.js';
+import { taskBAC, taskEV, taskPV, taskAC } from './evm.js';
+import { renderFullImage, renderSVG } from './network.js';
 
 function safeFilename(title, fallback) {
   return (String(title || '').replace(/[^\w\-]+/g, '_').replace(/^_+|_+$/g, '') || fallback);
@@ -27,11 +29,21 @@ function download(blobOrUrl, filename) {
 
 export function saveJSON() {
   const state = getState();
+  // The file is stamped with the format version it conforms to, the build that
+  // wrote it, and when — so a project on disk is self-describing and a future
+  // load can tell what it is looking at. schemaVersion leads, since that is the
+  // field a loader reads first.
+  const payload = {
+    schemaVersion: SCHEMA_VERSION,
+    appVersion: APP_VERSION,
+    exportedAt: new Date().toISOString(),
+    ...state
+  };
   download(
-    new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }),
+    new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
     safeFilename(state.projectTitle, 'cpm_project') + '.json'
   );
-  toast('Project JSON downloaded', 'success');
+  toast(`Project JSON downloaded (format v${SCHEMA_VERSION})`, 'success');
 }
 
 export function loadJSON(file, onLoaded) {
@@ -39,7 +51,15 @@ export function loadJSON(file, onLoaded) {
   reader.onerror = () => toast('Could not read that file', 'error');
   reader.onload = () => {
     try {
-      const data = normalizeState(JSON.parse(reader.result));
+      const parsed = JSON.parse(reader.result);
+      // A file from a newer schema than this build knows about is loaded anyway,
+      // but say so: normalizeState will drop or ignore anything it does not
+      // recognise, so the project may come in missing something it was saved with.
+      const fileSchema = Number(parsed && parsed.schemaVersion);
+      if (Number.isFinite(fileSchema) && fileSchema > SCHEMA_VERSION) {
+        toast(`Saved by a newer version (format v${fileSchema}). Loading anyway — some settings may not carry over.`, 'info');
+      }
+      const data = normalizeState(parsed);
       setState(data);
       seedHistory();
       onLoaded();
@@ -67,6 +87,24 @@ export function exportPNG() {
     }
     download(out.toDataURL('image/png'), safeFilename(getState().projectTitle, 'diagram') + '.png');
     toast('PNG exported', 'success');
+  } catch (err) {
+    toast('Export failed: ' + err.message, 'error');
+  }
+}
+
+/** The whole diagram as a standalone, scalable SVG — vector where PNG rasterises. */
+export function exportSVG() {
+  try {
+    const svg = renderSVG();
+    if (!svg) {
+      toast('No diagram to export', 'info');
+      return;
+    }
+    download(
+      new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }),
+      safeFilename(getState().projectTitle, 'diagram') + '.svg'
+    );
+    toast('SVG exported', 'success');
   } catch (err) {
     toast('Export failed: ' + err.message, 'error');
   }
@@ -105,6 +143,7 @@ export function exportCSV() {
   const header = [
     'Page', 'Milestone', 'Task ID', 'Title', 'Description', 'Assigned To', 'Tags',
     'Status', 'Progress %',
+    'Budget', 'Actual Cost', 'Earned Value', 'Planned Value',
     'Optimistic', 'Most Likely', 'Pessimistic', 'Duration',
     ...(state.dataDate != null ? ['Remaining'] : []),
     'ES', 'EF', 'LS', 'LF', 'Total Float', 'Free Float', 'Critical', 'Late',
@@ -143,6 +182,10 @@ export function exportCSV() {
           (node.tags || []).join('; '),
           node.status || 'not_started',
           Math.round(node.progress || 0),
+          taskBAC(node),
+          taskAC(node) ?? '',
+          +taskEV(node).toFixed(2),
+          (v => v == null ? '' : +v.toFixed(2))(taskPV(node, m, state.dataDate)),
           node.min,
           node.likely ?? '',
           node.max,

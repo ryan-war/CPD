@@ -440,6 +440,10 @@ export function buildVisData() {
         `Status: ${node.status || 'not_started'} · ${Math.round(node.progress || 0)}%`,
         node.assignee ? `Assigned to: ${node.assignee}` : '',
         tagsOf(node).length ? `Tags: ${tagsOf(node).join(', ')}` : '',
+        Number(node.cost) > 0
+          ? `Cost: ${state.currency || '$'}${Math.round(node.cost).toLocaleString()}` +
+            (node.actualCost != null ? ` · actual ${state.currency || '$'}${Math.round(node.actualCost).toLocaleString()}` : '')
+          : '',
         `Milestone: ${found?.milestone.title || '—'}`,
         `Duration used: ${fmt(metric.duration)}d`,
         node.mustFinishBy != null
@@ -1214,4 +1218,77 @@ export function renderFullImage(scaleFactor = 2) {
   network.redraw();
 
   return out;
+}
+
+/**
+ * Render the current diagram as a standalone SVG string — vector, theme-
+ * coloured, and dependency-free. PNG rasterises the canvas; this walks the
+ * schedule and the task positions instead, so the result scales cleanly and
+ * carries real text a report or an editor can select.
+ */
+export function renderSVG() {
+  if (!network) return null;
+  const { metrics, criticalIds, nearCritical, nodes, links } = schedule();
+  if (!nodes.length) return null;
+
+  const boxes = getState().nodeShape === 'box';
+  const halfW = boxes ? 78 : 44;
+  const halfH = boxes ? 34 : 44;
+  const positions = network.getPositions(nodes.map(n => n.id));
+  const at = id => positions[id] || { x: 0, y: 0 };
+
+  const xs = nodes.map(n => at(n.id).x);
+  const ys = nodes.map(n => at(n.id).y);
+  const pad = 60;
+  const minX = Math.min(...xs) - halfW - pad;
+  const minY = Math.min(...ys) - halfH - pad;
+  const width = Math.max(...xs) + halfW + pad - minX;
+  const height = Math.max(...ys) + halfH + pad - minY;
+
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const riskColour = id => {
+    const m = metrics[id] || {};
+    if (m.slack < 0) return LATE_COLOR;
+    if (criticalIds.has(id)) return CRITICAL_COLOR;
+    if (nearCritical.has(id)) return NEAR_CRITICAL_COLOR;
+    return palette.nodeBorder;
+  };
+
+  const edgeSvg = links.filter(l => metrics[l.id] && metrics[l.to]).map(l => {
+    const a = at(l.id);
+    const b = at(l.to);
+    const critical = criticalIds.has(l.id) && criticalIds.has(l.to) && isDrivingLink(l, metrics);
+    const colour = critical ? CRITICAL_COLOR : palette.edge;
+    const dash = l.type === 'FS' ? '' : ' stroke-dasharray="6 4"';
+    return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${colour}" stroke-width="${critical ? 2.5 : 1.5}"${dash} marker-end="url(#arrow)"/>`;
+  }).join('');
+
+  const nodeSvg = nodes.map(n => {
+    const p = at(n.id);
+    const m = metrics[n.id] || {};
+    const stroke = riskColour(n.id);
+    const status = STATUS_COLORS[n.status];
+    const fill = status && n.status !== 'not_started'
+      ? `${status}` : palette.nodeBg;
+    const fillOpacity = status && n.status !== 'not_started' ? 0.18 : 1;
+    const shape = boxes
+      ? `<rect x="${p.x - halfW}" y="${p.y - halfH}" width="${halfW * 2}" height="${halfH * 2}" rx="8" fill="${palette.nodeBg}" stroke="${stroke}" stroke-width="2.5"/>` +
+        `<rect x="${p.x - halfW}" y="${p.y - halfH}" width="${halfW * 2}" height="${halfH * 2}" rx="8" fill="${fill}" fill-opacity="${fillOpacity}" stroke="none"/>`
+      : `<circle cx="${p.x}" cy="${p.y}" r="${halfW}" fill="${palette.nodeBg}" stroke="${stroke}" stroke-width="2.5"/>` +
+        `<circle cx="${p.x}" cy="${p.y}" r="${halfW}" fill="${fill}" fill-opacity="${fillOpacity}" stroke="none"/>`;
+    return `${shape}
+      <text x="${p.x}" y="${p.y - 4}" text-anchor="middle" font-weight="700" font-size="14" fill="${palette.nodeText}">${esc(n.id)}</text>
+      <text x="${p.x}" y="${p.y + 12}" text-anchor="middle" font-size="10" fill="${palette.nodeTextDim}">${esc(fmt(m.ES))}–${esc(fmt(m.EF))} · ${esc(fmt(m.duration))}d</text>`;
+  }).join('');
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${minY} ${width} ${height}" width="${Math.round(width)}" height="${Math.round(height)}" font-family="system-ui, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="${palette.edge}"/>
+    </marker>
+  </defs>
+  <rect x="${minX}" y="${minY}" width="${width}" height="${height}" fill="${palette.canvasBg}"/>
+  <g>${edgeSvg}</g>
+  <g>${nodeSvg}</g>
+</svg>`;
 }

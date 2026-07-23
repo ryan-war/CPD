@@ -841,7 +841,23 @@ body.compact-toolbar .tab-group { padding-left: 0.125rem; }
   justify-content: space-between;
   gap: 0.5rem;
   font-size: 0.8125rem;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.375rem;
+}
+.scenario-compare-against {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.scenario-compare-against select {
+  padding: 0.125rem 0.375rem;
+  font-size: 11px;
+  border-radius: 0.25rem;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  max-width: 12rem;
 }
 .scenario-table-wrap { overflow-x: auto; }
 .scenario-table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -856,6 +872,24 @@ body.compact-toolbar .tab-group { padding-left: 0.125rem; }
 .scenario-table td { padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--surface-3); }
 .scenario-table td:first-child { font-weight: 600; }
 .scenario-cell-title { color: var(--text-muted); max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ─── Cost / earned value ─────────────────────────────────── */
+
+#evm-panel { display: none; }
+#evm-panel.open { display: block; }
+
+.evm-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
+  gap: 0.375rem;
+  font-size: 10px;
+  margin-bottom: 0.5rem;
+}
+.evm-tiles .stat-tile > div:last-child { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.evm-note { margin-top: 0; margin-bottom: 0.5rem; }
+
+/* An on-track cost/schedule index or a favourable variance. */
+.stat-tile.stat-good { border-color: color-mix(in srgb, var(--success) 45%, transparent); color: var(--success); font-weight: 600; }
 
 /* ─── Resource load ───────────────────────────────────────── */
 
@@ -1410,4 +1444,21 @@ form textarea:focus { border-color: var(--accent); }
   .toast-enter { animation: none; }
   #splitter::before { transition: none; }
   * { scroll-behavior: auto !important; }
+}
+
+/* ─── Print / save-as-PDF ─────────────────────────────────────
+ * Strip the app chrome down to the diagram and the schedule summary, so
+ * printing (or "Save as PDF" from the print dialog) yields the plan, not the
+ * toolbar. The canvas is fitted to view first by the Print button. */
+@media print {
+  html, body { height: auto; overflow: visible; background: #fff; }
+  #toolbar-actions, #page-tabs, #btn-add-subpath, #splitter, #bottom-panel,
+  #canvas-controls, #legend, #minimap, #connect-hint, #canvas-empty,
+  #toasts, #more-menu, #page-picker, #display-menu, .modal {
+    display: none !important;
+  }
+  #app, #work-area, #canvas-pane { height: auto !important; display: block !important; min-height: 0 !important; }
+  #app-header { position: static; border: none; }
+  #network-canvas { height: 78vh !important; break-inside: avoid; }
+  #cpm-summary { display: flex !important; margin-top: 0.5rem; }
 }

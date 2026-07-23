@@ -1,7 +1,7 @@
 // Dialogs: task, dependency, milestone, sub-path, settings, and Monte Carlo.
 
 import { $, escapeHtml, toast, openModal, closeModal, isModalOpen } from './dom.js';
-import { isLaneId, CRITICAL_COLOR } from './config.js';
+import { isLaneId, CRITICAL_COLOR, APP_VERSION, SCHEMA_VERSION } from './config.js';
 import { schedule, setCriticality } from './schedule.js';
 import { runMonteCarlo, histogram } from './simulate.js';
 import {
@@ -142,6 +142,12 @@ export function openNodeModal(nodeId) {
   $('tag-names').innerHTML = allTags(getState().diagrams)
     .map(tag => `<option value="${escapeHtml(tag)}"></option>`).join('');
 
+  const currency = getState().currency || '$';
+  $('edit-cost-label').textContent = `Budget (cost, ${currency})`;
+  $('edit-actual-cost-label').textContent = `Actual cost (${currency})`;
+  $('edit-cost').value = node.cost != null ? node.cost : 0;
+  $('edit-actual-cost').value = node.actualCost != null ? node.actualCost : '';
+
   deadlineField($('edit-due'), $('edit-due-label'), $('edit-due-hint'), node.mustFinishBy, {
     labelText: 'Must finish by',
     hintText: 'Leave empty for none. Missing it shows negative float.'
@@ -246,6 +252,9 @@ export function saveNodeForm(event) {
   if (node.status === 'done') node.progress = 100;
   node.assignee = $('edit-assignee').value.trim();
   node.tags = parseTags($('edit-tags').value);
+  node.cost = Math.max(0, Number($('edit-cost').value) || 0);
+  const actualRaw = $('edit-actual-cost').value.trim();
+  node.actualCost = actualRaw === '' ? null : Math.max(0, Number(actualRaw) || 0);
   node.mustFinishBy = readDeadlineField($('edit-due'));
   node.startNoEarlierThan = readDeadlineField($('edit-snet'));
   node.dependencies = dependencies.map(toDependency);
@@ -455,6 +464,8 @@ export function openSettingsModal() {
   $('set-holidays').value = (cal.holidays || []).join('\n');
   $('set-near-critical').value = state.nearCriticalDays;
   $('set-node-shape').value = state.nodeShape;
+  $('set-currency').value = state.currency || '$';
+  $('app-version-line').textContent = `CPD v${APP_VERSION} · project format v${SCHEMA_VERSION}`;
 
   deadlineField($('set-deadline'), $('set-deadline-label'), $('set-deadline-hint'), state.deadline, {
     labelText: 'Project deadline',
@@ -504,6 +515,7 @@ export function saveSettingsForm(event) {
   state.dataDate = dataDate;
   state.nearCriticalDays = Math.max(0, Number($('set-near-critical').value) || 0);
   state.nodeShape = $('set-node-shape').value === 'box' ? 'box' : 'circle';
+  state.currency = ($('set-currency').value || '$').trim().slice(0, 4) || '$';
 
   closeSettingsModal();
   app.onChange('Project settings saved');

@@ -1,6 +1,6 @@
 // Project state: shape, validation, accessors, and undo/redo history.
 
-import { DEFAULT_DISPLAY, HISTORY_MAX, GHOST_MODES } from './config.js';
+import { DEFAULT_DISPLAY, HISTORY_MAX, GHOST_MODES, SCHEMA_VERSION } from './config.js';
 import { nodesOf, toDependency, predecessorIds, DEPENDENCY_TYPES, dayOrNull } from './cpm.js';
 import { DEFAULT_CALENDAR, toISODate, parseISODate } from './calendar.js';
 
@@ -16,6 +16,7 @@ export function setState(next) {
 
 export function createDefaultState() {
   return {
+    schemaVersion: SCHEMA_VERSION, // saved-project format version, for migration
     projectTitle: 'Critical Path Network',
     activeView: 'main',
     layoutMode: 'free',
@@ -28,6 +29,7 @@ export function createDefaultState() {
     calendar: { ...DEFAULT_CALENDAR },
     baseline: null,             // snapshot for planned-vs-actual comparison
     scenarios: [],              // saved what-if branches of the whole plan
+    currency: '$',              // symbol shown against cost / earned-value figures
     nodeDisplay: { ...DEFAULT_DISPLAY },
     pageOrder: ['main', 'sub_1', 'sub_2', 'sub_3'],
     pageTitles: {
@@ -137,6 +139,18 @@ export function normalizeState(data) {
   if (!data || typeof data !== 'object') throw new Error('project must be an object');
   if (!data.diagrams || !data.diagrams.main) throw new Error('missing diagrams.main');
 
+  // Migrate the format version up: run any registered step whose target sits
+  // above the file's version, then stamp it current. The field-fill repair
+  // below still runs regardless of version — migrations are for shape changes a
+  // fill cannot express, and are the seam future bumps hang off. A file from a
+  // newer schema is caught in io.js before it reaches here.
+  runMigrations(data);
+  // Provenance stamps belong to the exported file, not the live project — they
+  // are written fresh on every export. Left in state they would autosave, and
+  // then override the fresh stamps on the next save (the spread would win), so a
+  // saved file would carry the previous file's build and timestamp.
+  delete data.appVersion;
+  delete data.exportedAt;
   data.projectTitle = String(data.projectTitle || 'Critical Path Network');
   data.nodeDisplay = { ...DEFAULT_DISPLAY, ...(data.nodeDisplay || {}) };
   // Every other display option is a boolean; this one is a mode, so a file
@@ -159,6 +173,9 @@ export function normalizeState(data) {
   data.calendar = normalizeCalendar(data.calendar);
   if (data.baseline && typeof data.baseline !== 'object') data.baseline = null;
   data.scenarios = normalizeScenarios(data.scenarios);
+  // A short symbol shown against costs. Kept tight so a hand-edited file cannot
+  // put a paragraph where a "$" belongs.
+  data.currency = String(data.currency ?? '$').trim().slice(0, 4) || '$';
   if (!data.pageTitles) data.pageTitles = {};
   if (!Array.isArray(data.pageOrder)) {
     data.pageOrder = ['main', ...Object.keys(data.diagrams).filter(k => k !== 'main').sort()];
@@ -217,6 +234,12 @@ export function normalizeState(data) {
         n.startNoEarlierThan = dayOrNull(n.startNoEarlierThan);
         n.assignee = String(n.assignee || '').trim();
         n.tags = normalizeTags(n.tags);
+        // Budget (BAC) is a non-negative number; actual cost is null until
+        // someone records one, so an unreported task never reads as spending 0.
+        n.cost = Math.max(0, numberOr(n.cost, 0));
+        n.actualCost = Number.isFinite(Number(n.actualCost)) && Number(n.actualCost) >= 0
+          ? Number(n.actualCost)
+          : null;
         if (!n.position || typeof n.position !== 'object') n.position = { x: 0, y: 0 };
         n.position = { x: numberOr(n.position.x, 0), y: numberOr(n.position.y, 0) };
         if (n.linkedSubPage === undefined) n.linkedSubPage = null;
@@ -256,6 +279,29 @@ export function normalizeState(data) {
 function numberOr(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * Version migrations, keyed by the schema they bring a file *up to*.
+ *
+ * Each step transforms a file one version forward and is only reached by files
+ * older than it. The generic field-fill in normalizeState already adds any
+ * plain new field, so today's steps are no-ops — tags, scenarios, and cost all
+ * arrive through that fill. A step earns real code only when a bump *reshapes*
+ * something a fill cannot (a field split in two, a value re-encoded), and it is
+ * added here so the whole chain replays for a file that skipped versions.
+ */
+const MIGRATIONS = {
+  2: data => data, // 1 → 2: tags + scenarios, filled generically
+  3: data => data  // 2 → 3: cost / earned value, filled generically
+};
+
+function runMigrations(data) {
+  const from = Number.isFinite(Number(data.schemaVersion)) ? Number(data.schemaVersion) : 1;
+  for (let v = from + 1; v <= SCHEMA_VERSION; v++) {
+    if (MIGRATIONS[v]) MIGRATIONS[v](data);
+  }
+  data.schemaVersion = SCHEMA_VERSION;
 }
 
 /**

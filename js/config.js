@@ -1,5 +1,21 @@
 // Shared constants and tunables.
 
+/**
+ * Versioning.
+ *
+ * APP_VERSION is the build of the tool; it is stamped onto exported files as
+ * provenance — which version wrote this. SCHEMA_VERSION is the saved-project
+ * format, bumped only when the shape of the file changes in a way an older
+ * build could misread. normalizeState migrates any lower or absent version up
+ * to the current one, so old files keep loading; a file written by a *newer*
+ * schema than this build understands is loaded on a best-effort basis with a
+ * warning. Schema 1 was the original release, before tags, scenarios, or a
+ * version stamp existed; schema 2 adds them; schema 3 adds task cost and the
+ * earned-value fields.
+ */
+export const APP_VERSION = '1.2.0';
+export const SCHEMA_VERSION = 3;
+
 export const CRITICAL_COLOR = '#ff4d4d';
 export const NEAR_CRITICAL_COLOR = '#f59e0b';
 /** Negative float — past a deadline, not merely driving the finish. */

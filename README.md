@@ -118,6 +118,29 @@ files you keep yourself.
 - **Sensitivity** — which estimates actually drive the project duration, by
   correlation between each task's sampled duration and the outcome.
 
+### Cost and earned value
+
+- **Per-task budget and actuals** — give a task a cost, and record what it has
+  actually cost as the work is done.
+- **Earned value** — the **Cost** panel reports budget (BAC), planned value,
+  earned value, and actual cost, with the schedule and cost variances, the SPI
+  and CPI indices, and an EAC forecast of the final cost at the current rate.
+  Planned value reads off the same reporting date the schedule does, so the
+  money and the dates agree; figures that need an input the plan lacks (a
+  reporting date, a recorded actual) say so rather than reading as zero.
+
+### Sharing and export
+
+- **What-if scenarios** — save the whole plan under a name, change it, and
+  compare: the change in finish date and, task by task, what moved — against the
+  current plan or against another scenario. Duplicate and load them freely.
+- **Tags** — free-form, colour-coded labels that cut across milestones and
+  owners, with a filter strip that dims everything without the chosen tags.
+- **Shareable link** — copy a link that carries the whole project (compressed
+  into the URL, no server); open it anywhere for an editable copy.
+- **Export** — the diagram as PNG or vector **SVG**, the schedule as CSV, or
+  **Print** (Save as PDF) stripped down to the diagram and summary.
+
 ### Interface
 
 - **Two task shapes** — circles by default, or activity-on-node boxes that lay
@@ -226,6 +249,13 @@ has changed.
 **Save JSON** downloads the whole workspace — every page, its milestones, tasks,
 positions, and settings — as a single file. **Load JSON** restores it.
 
+Every saved file is stamped with a version: `schemaVersion` (the file format
+this project conforms to), `appVersion` (the build that wrote it), and
+`exportedAt` (when). The current version is shown in **Settings**. A file from
+an older schema is migrated up on load; one from a newer schema than this build
+knows about is loaded on a best-effort basis with a warning, since it may carry
+fields this build does not understand.
+
 Loaded files are validated and repaired on import: missing fields are filled in,
 out-of-range estimates are clamped, duplicate task IDs are made unique, and
 dependencies or links pointing at things that no longer exist are dropped. Files
@@ -237,7 +267,11 @@ use in a spreadsheet.
 
 ```jsonc
 {
+  "schemaVersion": 3,            // saved-project format version
+  "appVersion": "1.2.0",        // build that wrote the file
+  "exportedAt": "2026-07-23T12:00:00.000Z",
   "projectTitle": "Critical Path Network",
+  "currency": "$",               // symbol shown against cost figures
   "activeView": "main",
   "layoutMode": "free",          // "free" | "cpm" | "milestone"
   "estimationMode": "average",   // "average" | "pert"
@@ -276,6 +310,9 @@ use in a spreadsheet.
               "progress": 100,
               "status": "done",          // not_started | in_progress | blocked | done
               "assignee": "Ada",         // "" for nobody
+              "tags": ["QA", "client-facing"], // free-form labels, filterable
+              "cost": 12000,             // budget (BAC) for earned value
+              "actualCost": 8000,        // spent so far, or null if unrecorded
               "mustFinishBy": null,      // day offset this task is due by
               "startNoEarlierThan": null,// day offset it cannot start before
               "dependencies": [
@@ -290,7 +327,15 @@ use in a spreadsheet.
       ]
     },
     "sub_1": { "milestones": [] }
-  }
+  },
+  "scenarios": [                 // saved what-if branches; each holds a whole
+    {                            // snapshot of the plan under a name
+      "id": "scn_ab12cd3",
+      "name": "Compressed schedule",
+      "capturedAt": "2026-07-23T12:00:00.000Z",
+      "data": { "…": "a full project, minus its own scenarios" }
+    }
+  ]
 }
 ```
 

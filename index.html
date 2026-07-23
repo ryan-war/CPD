@@ -63,6 +63,9 @@
           <button type="button" id="btn-quality" data-secondary title="Schedule health — whether the plan is sound, not just whether it computes" aria-pressed="false" class="tool-btn">
             <i data-lucide="stethoscope" class="w-3.5 h-3.5" aria-hidden="true"></i> Health
           </button>
+          <button type="button" id="btn-evm" data-secondary title="Cost &amp; earned value — whether the plan is on budget, not just on time" aria-pressed="false" class="tool-btn">
+            <i data-lucide="banknote" class="w-3.5 h-3.5" aria-hidden="true"></i> Cost
+          </button>
           <button type="button" id="btn-monte" data-secondary title="Monte Carlo risk simulation" class="tool-btn">
             <i data-lucide="dices" class="w-3.5 h-3.5" aria-hidden="true"></i> Simulate
           </button>
@@ -78,6 +81,9 @@
           <button type="button" id="btn-save" data-secondary title="Save project as JSON" class="tool-btn">
             <i data-lucide="download" class="w-3.5 h-3.5" aria-hidden="true"></i> Save JSON
           </button>
+          <button type="button" id="btn-share" data-secondary title="Copy a shareable link to this project (no server — the plan travels in the link)" class="tool-btn">
+            <i data-lucide="share-2" class="w-3.5 h-3.5" aria-hidden="true"></i> Share Link
+          </button>
           <label data-secondary class="tool-btn cursor-pointer">
             <i data-lucide="upload" class="w-3.5 h-3.5" aria-hidden="true"></i> Load JSON
             <input id="file-input" type="file" accept=".json,application/json" class="sr-only" />
@@ -85,8 +91,14 @@
           <button type="button" id="btn-export-png" data-secondary title="Export the whole diagram as PNG" class="tool-btn">
             <i data-lucide="image" class="w-3.5 h-3.5" aria-hidden="true"></i> Export PNG
           </button>
+          <button type="button" id="btn-export-svg" data-secondary title="Export the whole diagram as vector SVG" class="tool-btn">
+            <i data-lucide="pen-tool" class="w-3.5 h-3.5" aria-hidden="true"></i> Export SVG
+          </button>
           <button type="button" id="btn-export-csv" data-secondary title="Export the schedule as CSV" class="tool-btn">
             <i data-lucide="table" class="w-3.5 h-3.5" aria-hidden="true"></i> Export CSV
+          </button>
+          <button type="button" id="btn-print" data-secondary title="Print the diagram (or save as PDF from the print dialog)" class="tool-btn">
+            <i data-lucide="printer" class="w-3.5 h-3.5" aria-hidden="true"></i> Print
           </button>
 
           <button type="button" id="btn-more" title="More tools" aria-label="More tools"
@@ -180,6 +192,11 @@
           <button type="button" id="btn-discard-restore" class="link-btn">Start a fresh project</button>
         </div>
 
+        <div id="shared-banner" class="hidden banner banner-info shrink-0 mb-3">
+          <span>Opened from a shared link — this is your own editable copy.</span>
+          <button type="button" id="btn-shared-save" class="link-btn">Save JSON to keep it</button>
+        </div>
+
         <div id="baseline-banner" class="hidden banner banner-info shrink-0 mb-3">
           <span data-baseline-text></span>
           <button type="button" id="btn-clear-baseline" class="link-btn">Clear baseline</button>
@@ -231,6 +248,15 @@
             <span id="quality-score" class="text-[10px] text-muted"></span>
           </div>
           <div id="quality-body"></div>
+        </div>
+
+        <div id="evm-panel" class="mb-4 shrink-0 card p-3">
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <h3 class="text-xs font-semibold flex items-center gap-1.5">
+              <i data-lucide="banknote" class="w-3.5 h-3.5" aria-hidden="true"></i> Cost &amp; Earned Value
+            </h3>
+          </div>
+          <div id="evm-body"></div>
         </div>
 
         <div id="milestones-container" class="space-y-4 flex-1 min-h-0"></div>
@@ -343,6 +369,19 @@
             <input id="edit-tags" type="text" list="tag-names" placeholder="e.g. QA, client-facing" />
             <datalist id="tag-names"></datalist>
             <p class="hint">Comma-separated. Cut across milestones — filter the diagram by them below.</p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label id="edit-cost-label" for="edit-cost">Budget (cost)</label>
+            <input id="edit-cost" type="number" min="0" step="1" placeholder="0" />
+            <p class="hint">Planned cost of this task — its earned value is measured against it.</p>
+          </div>
+          <div>
+            <label id="edit-actual-cost-label" for="edit-actual-cost">Actual cost</label>
+            <input id="edit-actual-cost" type="number" min="0" step="1" placeholder="Not yet recorded" />
+            <p class="hint">Leave empty until spent. Drives cost variance and the forecast.</p>
           </div>
         </div>
 
@@ -517,17 +556,28 @@
 
         <fieldset class="fieldset">
           <legend>Appearance</legend>
-          <label for="set-node-shape">Task shape</label>
-          <select id="set-node-shape">
-            <option value="circle">Circle (default)</option>
-            <option value="box">Box — activity-on-node notation</option>
-          </select>
-          <p class="hint">The box shape lays ES, duration, EF, LS, slack and LF out in a fixed grid.</p>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label for="set-node-shape">Task shape</label>
+              <select id="set-node-shape">
+                <option value="circle">Circle (default)</option>
+                <option value="box">Box — activity-on-node notation</option>
+              </select>
+            </div>
+            <div>
+              <label for="set-currency">Currency symbol</label>
+              <input id="set-currency" type="text" maxlength="4" placeholder="$" />
+            </div>
+          </div>
+          <p class="hint">The box shape lays ES, duration, EF, LS, slack and LF out in a fixed grid. The currency symbol prefixes cost figures.</p>
         </fieldset>
 
-        <div class="flex justify-end gap-2">
-          <button type="button" id="modal-settings-cancel" class="btn-secondary">Cancel</button>
-          <button type="submit" class="btn-primary">Save settings</button>
+        <div class="flex items-center justify-between gap-2">
+          <p id="app-version-line" class="hint mt-0"></p>
+          <div class="flex gap-2">
+            <button type="button" id="modal-settings-cancel" class="btn-secondary">Cancel</button>
+            <button type="submit" class="btn-primary">Save settings</button>
+          </div>
         </div>
       </form>
     </div>

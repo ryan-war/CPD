@@ -9,6 +9,9 @@ let app = {};
 // The scenario a comparison is currently shown for, so the list and the compare
 // panel stay in step across a re-render.
 let comparingId = null;
+// What that scenario is measured against: null means the live plan, otherwise
+// the id of another scenario — so you can compare two saved branches directly.
+let compareTargetId = null;
 
 export function initScenarios(callbacks) {
   app = callbacks;
@@ -66,6 +69,7 @@ export function renderScenarios() {
             <button type="button" class="tool-btn" data-scn-compare="${escapeHtml(s.id)}">${s.id === comparingId ? 'Hide' : 'Compare'}</button>
             <button type="button" class="tool-btn" data-scn-load="${escapeHtml(s.id)}" title="Replace the working plan with this scenario">Load</button>
             <button type="button" class="tool-btn" data-scn-update="${escapeHtml(s.id)}" title="Overwrite this scenario with the current plan">Update</button>
+            <button type="button" class="icon-btn" data-scn-duplicate="${escapeHtml(s.id)}" aria-label="Duplicate ${escapeHtml(s.name)}"><i data-lucide="copy" class="w-3.5 h-3.5" aria-hidden="true"></i></button>
             <button type="button" class="icon-btn" data-scn-rename="${escapeHtml(s.id)}" aria-label="Rename ${escapeHtml(s.name)}"><i data-lucide="pencil" class="w-3.5 h-3.5" aria-hidden="true"></i></button>
             <button type="button" class="icon-btn icon-btn-danger" data-scn-delete="${escapeHtml(s.id)}" aria-label="Delete ${escapeHtml(s.name)}"><i data-lucide="trash-2" class="w-3.5 h-3.5" aria-hidden="true"></i></button>
           </div>
@@ -86,13 +90,26 @@ function renderCompare() {
     return;
   }
 
-  const cmp = compareScenario(getState(), scenario.data);
+  // The baseline of the comparison: the live plan, or another saved scenario.
+  // A target that no longer exists (deleted while selected) falls back to live.
+  const target = compareTargetId ? scenarios().find(s => s.id === compareTargetId) : null;
+  if (compareTargetId && !target) compareTargetId = null;
+  const targetData = target ? target.data : getState();
+  const targetLabel = target ? target.name : 'the current plan';
+
+  const cmp = compareScenario(targetData, scenario.data);
   const deltaClass = cmp.projectDelta > 0 ? 'text-late' : cmp.projectDelta < 0 ? 'text-success' : 'text-muted';
   const verdict = cmp.projectDelta === 0
-    ? 'finishes at the same time as the current plan'
+    ? `finishes at the same time as ${targetLabel}`
     : cmp.projectDelta > 0
-      ? `finishes ${fmt(cmp.projectDelta)}d later than the current plan`
-      : `finishes ${fmt(-cmp.projectDelta)}d sooner than the current plan`;
+      ? `finishes ${fmt(cmp.projectDelta)}d later than ${targetLabel}`
+      : `finishes ${fmt(-cmp.projectDelta)}d sooner than ${targetLabel}`;
+
+  const options = [`<option value="current"${compareTargetId ? '' : ' selected'}>the current plan</option>`]
+    .concat(scenarios()
+      .filter(s => s.id !== comparingId)
+      .map(s => `<option value="${escapeHtml(s.id)}"${s.id === compareTargetId ? ' selected' : ''}>${escapeHtml(s.name)}</option>`))
+    .join('');
 
   const rows = cmp.tasks.length
     ? cmp.tasks.map(t => {
@@ -102,7 +119,7 @@ function renderCompare() {
         }
         if (t.status === 'removed') {
           return `<tr><td>${escapeHtml(t.id)}</td><td class="scenario-cell-title">${escapeHtml(t.title)}</td>
-            <td colspan="3" class="text-late">only in the current plan</td></tr>`;
+            <td colspan="3" class="text-late">only in ${escapeHtml(targetLabel)}</td></tr>`;
         }
         const critFlip = t.critCurrent !== t.critScenario
           ? (t.critScenario ? ' <span class="text-critical">now critical</span>' : ' <span class="text-muted">off critical</span>')
@@ -115,21 +132,31 @@ function renderCompare() {
           <td class="${deltaCell(t.finishDelta)}">${escapeHtml(fmtDelta(t.finishDelta))}d</td>
         </tr>`;
       }).join('')
-    : '<tr><td colspan="5" class="hint">Every task lands exactly where it does now — only project-level settings differ.</td></tr>';
+    : `<tr><td colspan="5" class="hint">Every task lands exactly where it does in ${escapeHtml(targetLabel)} — only project-level settings differ.</td></tr>`;
 
   host.classList.remove('hidden');
   host.innerHTML = `
     <div class="scenario-compare-head">
       <span class="font-medium">${escapeHtml(scenario.name)}</span>
-      <span class="${deltaClass}">${escapeHtml(verdict)}</span>
+      <label class="scenario-compare-against">vs
+        <select data-compare-target aria-label="Compare against">${options}</select>
+      </label>
     </div>
+    <p class="text-xs ${deltaClass}">${escapeHtml(verdict)}.</p>
     <div class="scenario-table-wrap">
       <table class="scenario-table">
         <thead><tr><th>ID</th><th>Task</th><th>Duration</th><th>Start</th><th>Finish</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
-    <p class="hint">Deltas are this scenario minus the current plan. Positive means longer, later, or downstream.</p>`;
+    <p class="hint">Deltas are "${escapeHtml(scenario.name)}" minus ${escapeHtml(targetLabel)}. Positive means longer, later, or downstream.</p>`;
+}
+
+/** The compare panel's "vs" selector changed which plan is the baseline. */
+export function setCompareTarget(value) {
+  compareTargetId = value && value !== 'current' ? value : null;
+  renderCompare();
+  app.refreshIcons();
 }
 
 /** A signed delta reads late when positive (later/longer), early when negative. */
@@ -162,20 +189,39 @@ function defaultName() {
 export function handleScenarioClick(event) {
   const btn = event.target.closest('button');
   if (!btn) return;
-  const { scnCompare, scnLoad, scnUpdate, scnRename, scnDelete } = btn.dataset;
+  const { scnCompare, scnLoad, scnUpdate, scnRename, scnDelete, scnDuplicate } = btn.dataset;
 
   if (scnCompare) {
     comparingId = comparingId === scnCompare ? null : scnCompare;
+    // A fresh comparison starts against the live plan, not a target left over
+    // from the last one — which may have been this very scenario.
+    compareTargetId = null;
     renderScenarios();
   } else if (scnLoad) {
     loadScenario(scnLoad);
   } else if (scnUpdate) {
     updateScenario(scnUpdate);
+  } else if (scnDuplicate) {
+    duplicateScenario(scnDuplicate);
   } else if (scnRename) {
     renameScenario(scnRename);
   } else if (scnDelete) {
     deleteScenario(scnDelete);
   }
+}
+
+function duplicateScenario(id) {
+  const s = find(id);
+  if (!s) return;
+  scenarios().push({
+    id: uid('scn'),
+    name: `${s.name} (copy)`.slice(0, 80),
+    capturedAt: new Date().toISOString(),
+    // A deep copy so editing or reloading one never reaches into the other.
+    data: JSON.parse(JSON.stringify(s.data))
+  });
+  app.onChange(`Duplicated "${s.name}"`);
+  renderScenarios();
 }
 
 function find(id) {

@@ -10,6 +10,7 @@ import { linkBadgeHtml } from './links.js';
 import { orderedNodes } from './layout.js';
 import { resourceLoad, levelResources, UNASSIGNED } from './resources.js';
 import { assessSchedule } from './quality.js';
+import { projectEVM } from './evm.js';
 // network.js does not import this module, so this direction is not a cycle.
 import { getGhostNote, getActiveTags, clearActiveTags } from './network.js';
 import { tagsOf, tagCounts, matchesTags } from './tags.js';
@@ -18,6 +19,7 @@ import { CRITICAL_COLOR, NEAR_CRITICAL_COLOR, LATE_COLOR, STATUS_COLORS, STATUS_
 let ganttOpen = false;
 let resourcesOpen = false;
 let qualityOpen = false;
+let evmOpen = false;
 let resourceCapacity = 1;
 let highlightedIds = new Set();
 
@@ -788,6 +790,131 @@ export function renderQuality() {
                   title="Select these tasks on the diagram">${escapeHtml(summariseIds(c.ids))}</button>` : ''}
       </div>
     </div>`).join('');
+}
+
+// ─── Cost / earned value ───────────────────────────────────
+
+export function isEvmOpen() {
+  return evmOpen;
+}
+
+export function setEvmOpen(open) {
+  evmOpen = open;
+  $('evm-panel').classList.toggle('open', open);
+  const btn = $('btn-evm');
+  btn.classList.toggle('tool-btn-active', open);
+  btn.setAttribute('aria-pressed', String(open));
+  if (open) renderEVM();
+}
+
+/** A money figure with the project's symbol, or an em dash when there is none. */
+function money(value) {
+  if (value == null || Number.isNaN(value)) return '—';
+  const cur = getState().currency || '$';
+  return cur + Math.round(value).toLocaleString();
+}
+
+/** A signed money figure — "+$1,200" / "−$800" / "$0" — for variances. */
+function signedMoney(value) {
+  if (value == null || Number.isNaN(value)) return '—';
+  if (value === 0) return money(0);
+  const cur = getState().currency || '$';
+  return (value > 0 ? '+' : '−') + cur + Math.round(Math.abs(value)).toLocaleString();
+}
+
+/** A performance index: 2 decimals, coloured under/over 1. */
+function indexTile(label, value, help) {
+  const cls = value == null ? '' : value < 1 ? 'stat-late' : 'stat-good';
+  const text = value == null ? '—' : value.toFixed(2);
+  return `<div class="stat-tile ${cls}" title="${escapeHtml(help)}">
+    <div class="text-muted">${escapeHtml(label)}</div><div>${text}</div></div>`;
+}
+
+function moneyTile(label, value, help, { signed = false } = {}) {
+  const cls = !signed || value == null || value === 0
+    ? '' : value > 0 ? 'stat-good' : 'stat-late';
+  const text = signed ? signedMoney(value) : money(value);
+  return `<div class="stat-tile ${cls}" title="${escapeHtml(help)}">
+    <div class="text-muted">${escapeHtml(label)}</div><div>${escapeHtml(text)}</div></div>`;
+}
+
+/**
+ * Earned value for the current page. Cost is per task; the figures roll up
+ * exactly as the Gantt/Health panels do — the page you are on, with Main being
+ * the project. Figures that need an input the plan does not have (a reporting
+ * date for PV, a recorded actual for CPI) are shown as "—" with a note, rather
+ * than invented as zero.
+ */
+export function renderEVM() {
+  const panel = $('evm-panel');
+  const body = $('evm-body');
+  if (!evmOpen) {
+    panel.classList.remove('open');
+    return;
+  }
+  panel.classList.add('open');
+
+  const { metrics, nodes, dataDate } = schedule();
+  if (!nodes.length) {
+    body.innerHTML = '<p class="text-xs text-muted">Nothing to cost on this page yet.</p>';
+    return;
+  }
+
+  const evm = projectEVM(nodes, metrics, dataDate);
+  if (!evm.hasCost) {
+    body.innerHTML = `
+      <p class="text-xs text-muted">
+        No task has a budget yet. Set <strong>Budget (cost)</strong> on a task to
+        track earned value — how much of the plan's cost has been delivered, and
+        whether it is on schedule and on budget.
+      </p>`;
+    return;
+  }
+
+  const notes = [];
+  if (!evm.tracking) {
+    notes.push('Planned value and SPI need a reporting date — set <strong>Reported as of</strong> in Settings.');
+  }
+  if (!evm.hasActuals) {
+    notes.push('Cost variance, CPI, and the forecast need actuals — set <strong>Actual cost</strong> on tasks as they are spent.');
+  }
+
+  const tiles = `
+    <div class="evm-tiles">
+      ${moneyTile('Budget (BAC)', evm.BAC, 'Budget at completion — the total planned cost')}
+      ${moneyTile('Planned (PV)', evm.PV, 'Budgeted cost of the work scheduled by the reporting date')}
+      ${moneyTile('Earned (EV)', evm.EV, 'Budgeted cost of the work actually done')}
+      ${moneyTile('Actual (AC)', evm.AC, 'What the completed work actually cost')}
+      ${moneyTile('Schedule var (SV)', evm.SV, 'EV − PV: ahead when positive, behind when negative', { signed: true })}
+      ${moneyTile('Cost var (CV)', evm.CV, 'EV − AC: under budget when positive, over when negative', { signed: true })}
+      ${indexTile('SPI', evm.SPI, 'EV / PV — below 1 is behind schedule')}
+      ${indexTile('CPI', evm.CPI, 'EV / AC — below 1 is over budget')}
+      ${moneyTile('Forecast (EAC)', evm.EAC, 'BAC / CPI — projected total cost at the current rate')}
+      ${moneyTile('Var at compl. (VAC)', evm.VAC, 'BAC − EAC: expected under/over spend at the end', { signed: true })}
+    </div>`;
+
+  const rows = evm.byTask
+    .filter(t => t.BAC > 0 || t.AC != null)
+    .map(t => `
+      <tr>
+        <td>${escapeHtml(t.id)}</td>
+        <td class="scenario-cell-title">${escapeHtml(t.title)}</td>
+        <td>${money(t.BAC)}</td>
+        <td>${money(t.EV)}</td>
+        <td>${money(t.PV)}</td>
+        <td>${money(t.AC)}</td>
+        <td class="${t.CV == null ? '' : t.CV < 0 ? 'text-late' : 'text-success'}">${money(t.CV)}</td>
+      </tr>`).join('');
+
+  body.innerHTML = `
+    ${tiles}
+    ${notes.length ? `<p class="hint evm-note">${notes.join('<br>')}</p>` : ''}
+    <div class="scenario-table-wrap">
+      <table class="scenario-table">
+        <thead><tr><th>ID</th><th>Task</th><th>Budget</th><th>Earned</th><th>Planned</th><th>Actual</th><th>Cost var</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
 }
 
 // ─── Summary and legend ────────────────────────────────────

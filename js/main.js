@@ -27,7 +27,8 @@ import {
   renderBottomPanel, renderGantt, renderSummary, renderLegend, clearMonteCarloSummary,
   isGanttOpen, setGanttOpen, highlightTasks,
   renderResources, isResourcesOpen, setResourcesOpen, setResourceCapacity, getResourceCapacity,
-  renderQuality, isQualityOpen, setQualityOpen, renderTagFilter
+  renderQuality, isQualityOpen, setQualityOpen, renderTagFilter,
+  renderEVM, isEvmOpen, setEvmOpen
 } from './panel.js';
 import { levelResources } from './resources.js';
 import {
@@ -40,9 +41,10 @@ import {
 } from './modals.js';
 import {
   initScenarios, openScenariosModal, closeScenariosModal, saveCurrentAsScenario,
-  handleScenarioClick
+  handleScenarioClick, setCompareTarget
 } from './scenario-ui.js';
-import { saveJSON, exportPNG, exportCSV, bindFileInput } from './io.js';
+import { saveJSON, exportPNG, exportSVG, exportCSV, bindFileInput } from './io.js';
+import { buildShareLink, decodeProject, sharedPayloadInUrl, MAX_LINK_LENGTH } from './share.js';
 import { initSplitter, initCompactToolbar } from './layout-ui.js';
 import { scheduleSave, saveNow, readSaved, clearSaved, describeAge } from './storage.js';
 
@@ -73,6 +75,7 @@ function render({ fit = false } = {}) {
   renderGantt();
   renderResources();
   renderQuality();
+  renderEVM();
   renderLegend();
   updateHistoryButtons();
   updateCanvasEmptyState();
@@ -380,6 +383,8 @@ function newTask(id, x, y) {
     // the documented format says it carries.
     assignee: '',
     tags: [],
+    cost: 0,
+    actualCost: null,
     mustFinishBy: null,
     startNoEarlierThan: null,
     dependencies: [],
@@ -634,6 +639,47 @@ function clearTagFilter() {
   render();
 }
 
+// ─── Share link ────────────────────────────────────────────
+
+async function shareLink() {
+  try {
+    const link = await buildShareLink(getState());
+    if (link.length > MAX_LINK_LENGTH) {
+      toast('This project is too large to share as a link — use Save JSON instead', 'error');
+      return;
+    }
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(link);
+      toast('Share link copied to clipboard', 'success');
+    } else {
+      // No clipboard access (older browser, insecure origin) — hand it over to copy.
+      window.prompt('Copy this share link', link);
+    }
+  } catch (err) {
+    toast('Could not create a share link: ' + (err?.message || err), 'error');
+  }
+}
+
+/**
+ * A project encoded into the URL wins over the restored session: someone
+ * followed a link to see *this* plan, not to be dropped back into their own.
+ * The hash is cleared once read, so a reload does not re-import and Save does
+ * not inherit it. Returns whether a shared plan was loaded.
+ */
+async function loadSharedIfPresent() {
+  const payload = sharedPayloadInUrl();
+  if (!payload) return false;
+  try {
+    const data = await decodeProject(payload);
+    setState(normalizeState(data));
+    history.replaceState(null, '', location.pathname + location.search);
+    return true;
+  } catch {
+    toast('That shared link could not be read — starting fresh', 'error');
+    return false;
+  }
+}
+
 // ─── Baseline ──────────────────────────────────────────────
 
 function setBaseline() {
@@ -703,6 +749,7 @@ function wireToolbar() {
   $('btn-gantt').addEventListener('click', () => setGanttOpen(!isGanttOpen()));
   $('btn-resources').addEventListener('click', () => setResourcesOpen(!isResourcesOpen()));
   $('btn-quality').addEventListener('click', () => setQualityOpen(!isQualityOpen()));
+  $('btn-evm').addEventListener('click', () => setEvmOpen(!isEvmOpen()));
   // A list of ids you cannot act on is just a reproach; clicking a finding
   // selects the tasks it names so you can go and look at them.
   $('quality-body').addEventListener('click', event => {
@@ -729,8 +776,16 @@ function wireToolbar() {
   });
   $('btn-monte').addEventListener('click', openMonteModal);
   $('btn-save').addEventListener('click', saveJSON);
+  $('btn-share').addEventListener('click', shareLink);
   $('btn-export-png').addEventListener('click', exportPNG);
+  $('btn-export-svg').addEventListener('click', exportSVG);
   $('btn-export-csv').addEventListener('click', exportCSV);
+  // Fit the whole graph into view first, so the print/PDF shows the diagram
+  // rather than whatever slice happened to be on screen.
+  $('btn-print').addEventListener('click', () => {
+    fitView(0);
+    window.setTimeout(() => window.print(), 300);
+  });
   $('btn-settings').addEventListener('click', openSettingsModal);
   $('btn-theme').addEventListener('click', toggleTheme);
   $('btn-add-milestone').addEventListener('click', () => openMilestoneModal(null));
@@ -746,7 +801,12 @@ function wireToolbar() {
     saveCurrentAsScenario();
   });
   $('scn-list').addEventListener('click', handleScenarioClick);
+  $('scn-compare').addEventListener('change', event => {
+    const select = event.target.closest('[data-compare-target]');
+    if (select) setCompareTarget(select.value);
+  });
   $('btn-discard-restore').addEventListener('click', discardSavedWork);
+  $('btn-shared-save').addEventListener('click', saveJSON);
   $('btn-zoom-in').addEventListener('click', () => zoomBy(1.25));
   $('btn-zoom-out').addEventListener('click', () => zoomBy(0.8));
   $('btn-canvas-add').addEventListener('click', () => addNodeAt());
@@ -1225,7 +1285,7 @@ function loadScenarioState(newState) {
   render({ fit: true });
 }
 
-function boot() {
+async function boot() {
   // Both libraries come from a CDN. Without this check a blocked or failed
   // request leaves a blank page and a console stack trace.
   const missing = [];
@@ -1238,7 +1298,9 @@ function boot() {
     return;
   }
 
-  restoreSavedWork();
+  // A shared link, if present, is what to show — ahead of the restored session.
+  const fromShare = await loadSharedIfPresent();
+  if (!fromShare) restoreSavedWork();
   normalizeState(getState());
   seedHistory();
   applyTheme();
@@ -1316,6 +1378,8 @@ function boot() {
   // project with a half-initialised one if anything above threw.
   autosaveReady = true;
   render({ fit: true });
+
+  if (fromShare) $('shared-banner').classList.remove('hidden');
 }
 
 if (document.readyState === 'loading') {
