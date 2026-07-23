@@ -808,6 +808,18 @@ body.compact-toolbar .tab-group { padding-left: 0.125rem; }
 .task-card-dim { opacity: 0.32; }
 .task-card-dim:hover { opacity: 0.7; }
 
+/* The tag palette is tuned for dark surfaces; on a light background the brighter
+ * hues (amber, lime, sky) fail as text. In the light theme the chip text and
+ * border are darkened toward slate — enough for contrast while the hue still
+ * tells the tags apart; the tinted fill carries the colour. */
+:root[data-theme='light'] .tag-chip,
+:root[data-theme='light'] .tag-toggle {
+  color: color-mix(in srgb, var(--tag) 68%, #0f172a);
+  border-color: color-mix(in srgb, var(--tag) 60%, #0f172a);
+}
+:root[data-theme='light'] .tag-chip { background: color-mix(in srgb, var(--tag) 18%, #ffffff); }
+:root[data-theme='light'] .tag-toggle { background: color-mix(in srgb, var(--tag) 14%, #ffffff); }
+
 /* ─── Scenarios ───────────────────────────────────────────── */
 
 .scenario-list { display: flex; flex-direction: column; gap: 0.375rem; max-height: 15rem; overflow-y: auto; }

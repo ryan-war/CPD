@@ -59,6 +59,11 @@ let autosaveReady = false;
  * share a single CPM pass instead of running four.
  */
 function render({ fit = false } = {}) {
+  // Opt-in render timing for profiling the panel at scale — set
+  // `window.__cpdPerf = true` in the console. Off by default, so it costs
+  // nothing; on, it prints how long a full render takes at the current task
+  // count, which is how to tell whether the card list needs virtualising.
+  const perfStart = window.__cpdPerf ? performance.now() : 0;
   invalidateSchedule();
   // Keep the tag filter to tags that still exist here before anything styles by
   // it, so a removed or off-page tag never dims the diagram against nothing.
@@ -81,6 +86,9 @@ function render({ fit = false } = {}) {
   updateCanvasEmptyState();
   if (autosaveReady) scheduleSave(getState, message => toast(message, 'error'));
   if (fit) fitView();
+  if (perfStart) {
+    console.log(`[cpd] render of ${allNodes().length} tasks: ${(performance.now() - perfStart).toFixed(1)}ms`);
+  }
 }
 
 /** A state change: record history, clear stale results, re-render. */
@@ -650,12 +658,29 @@ function clearSearch() {
 function toggleTagFilter(tag) {
   if (!tag) return;
   toggleActiveTag(tag);
-  render();
+  applyTagFilterView();
 }
 
 function clearTagFilter() {
   clearActiveTags();
-  render();
+  applyTagFilterView();
+}
+
+/**
+ * Repaint for a filter change only.
+ *
+ * A filter dims tasks; it changes neither the schedule nor the layout. So
+ * rather than a full render — which rebuilds the whole vis-network dataset,
+ * every panel, the tabs and the legend, and queues an autosave — restyle the
+ * canvas nodes in place and repaint just the cards and the filter strip. On a
+ * large diagram, where a filter is toggled often, this is the difference
+ * between a targeted update and rebuilding everything; it also keeps the
+ * current selection, which a dataset rebuild would drop.
+ */
+function applyTagFilterView() {
+  refreshHighlights();   // canvas nodes: apply or lift the dim, no rebuild
+  renderBottomPanel();   // cards: dim classes and chip pressed states
+  renderTagFilter();     // the filter strip's own pressed states
 }
 
 // ─── Share link ────────────────────────────────────────────
