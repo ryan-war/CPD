@@ -14,6 +14,7 @@ import { getState, allNodes } from './state.js';
 let cached = null;
 let cachedMain = null;
 let cachedRollups = null;
+let cachedChain = null;
 let criticality = null;
 
 /** Drop the cached schedule. Call after any mutation. */
@@ -21,6 +22,7 @@ export function invalidateSchedule() {
   cached = null;
   cachedMain = null;
   cachedRollups = null;
+  cachedChain = null;
 }
 
 /**
@@ -48,7 +50,10 @@ export function schedule() {
   const mode = state.estimationMode;
   const rollup = createRollup(state.diagrams, mode);
   const graph = compileGraph(nodes);
-  const result = computeCPM(nodes, { mode, rollup, graph });
+  // Only the Main Diagram answers to the project deadline. A sub-path is a
+  // component of it, not a project with a delivery date of its own.
+  const deadline = state.activeView === 'main' ? state.deadline : null;
+  const result = computeCPM(nodes, { mode, rollup, graph, deadline });
   const calendar = createCalendar(state.calendar);
 
   cached = {
@@ -58,10 +63,21 @@ export function schedule() {
     rollup,
     mode,
     calendar,
+    deadline,
+    overrun: overrunAgainst(result, deadline),
     nearCritical: nearCriticalSet(result, state.nearCriticalDays),
     drift: baselineDrift(result, state.baseline)
   };
   return cached;
+}
+
+/**
+ * Days by which the schedule misses its deadline, or null when there is no
+ * deadline. Negative means it lands early — the slack the plan has in hand.
+ */
+function overrunAgainst(result, deadline) {
+  if (deadline == null || !Number.isFinite(deadline)) return null;
+  return +(result.projectDuration - deadline).toFixed(4);
 }
 
 /**
@@ -77,7 +93,7 @@ export function mainSchedule() {
   const nodes = nodesOf(state.diagrams.main);
   const mode = state.estimationMode;
   const rollup = createRollup(state.diagrams, mode);
-  cachedMain = { ...computeCPM(nodes, { mode, rollup }), nodes };
+  cachedMain = { ...computeCPM(nodes, { mode, rollup, deadline: state.deadline }), nodes };
   return cachedMain;
 }
 
@@ -136,6 +152,53 @@ export function subPathRollups() {
 
   cachedRollups = { byPage, byNode };
   return cachedRollups;
+}
+
+/**
+ * The critical path traced down through linked sub-pages.
+ *
+ * On its own page a sub-path task can be critical while the whole branch has
+ * float in Main, and the diagram would still colour it red — telling you it
+ * matters when it does not. A task drives the *project* only when its page's
+ * parent task is itself critical, all the way up to Main. This walks that
+ * chain and returns, per page, the tasks that genuinely do.
+ *
+ * @returns {Map<string, Set<string>>} page id → task ids critical to Main
+ */
+export function projectCriticalPath() {
+  if (cachedChain) return cachedChain;
+
+  const state = getState();
+  const mode = state.estimationMode;
+  const rollup = createRollup(state.diagrams, mode);
+  const chain = new Map();
+  const visited = new Set();
+
+  const walk = (pageId, criticalIds) => {
+    if (visited.has(pageId)) return; // link cycle
+    visited.add(pageId);
+    chain.set(pageId, criticalIds);
+
+    nodesOf(state.diagrams[pageId] || {}).forEach(node => {
+      const child = node.linkedSubPage;
+      if (!child || !state.diagrams[child]) return;
+      // A branch below a task with float cannot be driving the project, so
+      // the whole sub-tree under it is left out rather than walked.
+      if (!criticalIds.has(node.id)) return;
+      const childNodes = nodesOf(state.diagrams[child]);
+      if (!childNodes.length) return;
+      walk(child, computeCPM(childNodes, { mode, rollup }).criticalIds);
+    });
+  };
+
+  walk('main', mainSchedule().criticalIds);
+  cachedChain = chain;
+  return cachedChain;
+}
+
+/** Is this task on the critical path of the whole project, not just its page? */
+export function isProjectCritical(pageId, nodeId) {
+  return projectCriticalPath().get(pageId)?.has(nodeId) ?? false;
 }
 
 /** The roll-up for one sub-page, or null when Main does not link it. */

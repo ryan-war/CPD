@@ -4,8 +4,11 @@ import { $, escapeHtml, toast, openModal, closeModal, isModalOpen } from './dom.
 import { isLaneId, CRITICAL_COLOR } from './config.js';
 import { schedule, setCriticality } from './schedule.js';
 import { runMonteCarlo, histogram } from './simulate.js';
-import { DEPENDENCY_TYPES, DEPENDENCY_LABELS, dependenciesOf, toDependency } from './cpm.js';
-import { WEEKDAY_NAMES, DEFAULT_CALENDAR } from './calendar.js';
+import {
+  DEPENDENCY_TYPES, DEPENDENCY_LABELS, dependenciesOf, toDependency, dayOrNull
+} from './cpm.js';
+import { WEEKDAY_NAMES, DEFAULT_CALENDAR, createCalendar, toISODate } from './calendar.js';
+import { assigneeNames } from './resources.js';
 import {
   getState, currentDiagram, allNodes, findNode, pageTitle, subPageIds, uid
 } from './state.js';
@@ -41,6 +44,40 @@ function populateLinkedSelect(currentValue) {
         `<option value="${escapeHtml(n.id)}"${n.id === currentValue ? ' selected' : ''}>${escapeHtml(n.id)} — ${escapeHtml(n.title)}</option>`)
     ).join('');
   }
+}
+
+// ─── Deadline fields ───────────────────────────────────────
+//
+// The engine works in day offsets, but with a calendar switched on people
+// think in dates. The stored value stays an offset either way; only the input
+// changes, converting through the calendar on the way in and out.
+
+function deadlineField(input, label, hint, value, { labelText, hintText }) {
+  const calendar = createCalendar(getState().calendar);
+  label.textContent = labelText;
+
+  if (calendar.enabled) {
+    input.type = 'date';
+    input.value = value != null ? toISODate(calendar.offsetToDate(value)) : '';
+    hint.textContent = `${hintText} Working days only — a weekend rolls back to the Friday.`;
+  } else {
+    input.type = 'number';
+    input.min = '0';
+    input.step = '0.5';
+    input.value = value != null ? String(value) : '';
+    hint.textContent = `${hintText} A day number counted from the project start.`;
+  }
+}
+
+function readDeadlineField(input) {
+  const raw = input.value.trim();
+  if (!raw) return null;
+  if (input.type === 'date') {
+    const calendar = createCalendar(getState().calendar);
+    const offset = calendar.dateToOffset(raw);
+    return offset == null ? null : offset;
+  }
+  return dayOrNull(raw);
 }
 
 /** Editable list of predecessors, each with a relation type and lag. */
@@ -97,6 +134,14 @@ export function openNodeModal(nodeId) {
   $('edit-max').value = node.max;
   $('edit-status').value = node.status || 'not_started';
   $('edit-progress').value = node.progress != null ? node.progress : 0;
+  $('edit-assignee').value = node.assignee || '';
+  $('assignee-names').innerHTML = assigneeNames(getState().diagrams)
+    .map(name => `<option value="${escapeHtml(name)}"></option>`).join('');
+
+  deadlineField($('edit-due'), $('edit-due-label'), $('edit-due-hint'), node.mustFinishBy, {
+    labelText: 'Must finish by',
+    hintText: 'Leave empty for none. Missing it shows negative float.'
+  });
 
   populateLinkedSelect(getState().activeView === 'main'
     ? (node.linkedSubPage || '')
@@ -190,6 +235,8 @@ export function saveNodeForm(event) {
   node.status = $('edit-status').value;
   node.progress = Math.max(0, Math.min(100, Number($('edit-progress').value) || 0));
   if (node.status === 'done') node.progress = 100;
+  node.assignee = $('edit-assignee').value.trim();
+  node.mustFinishBy = readDeadlineField($('edit-due'));
   node.dependencies = dependencies.map(toDependency);
 
   const linkValue = $('edit-linked').value || null;
@@ -398,6 +445,11 @@ export function openSettingsModal() {
   $('set-near-critical').value = state.nearCriticalDays;
   $('set-node-shape').value = state.nodeShape;
 
+  deadlineField($('set-deadline'), $('set-deadline-label'), $('set-deadline-hint'), state.deadline, {
+    labelText: 'Project deadline',
+    hintText: 'Leave empty for none. A deadline the plan misses turns float negative and reports how late it is.'
+  });
+
   $('set-workdays').innerHTML = WEEKDAY_NAMES.map((name, i) => `
     <label class="workday-chip">
       <input type="checkbox" value="${i}"${cal.workdays.includes(i) ? ' checked' : ''} />
@@ -421,12 +473,17 @@ export function saveSettingsForm(event) {
     return;
   }
 
+  // Read the deadline before the calendar changes under it: the field is
+  // interpreted against the calendar it was drawn with, not the new one.
+  const deadline = readDeadlineField($('set-deadline'));
+
   state.calendar = {
     enabled: $('set-calendar-enabled').checked,
     startDate: $('set-start-date').value || null,
     workdays,
     holidays: $('set-holidays').value.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
   };
+  state.deadline = deadline;
   state.nearCriticalDays = Math.max(0, Number($('set-near-critical').value) || 0);
   state.nodeShape = $('set-node-shape').value === 'box' ? 'box' : 'circle';
 

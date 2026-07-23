@@ -1,14 +1,19 @@
 // Bottom panel: milestone sections, task cards, the mini-Gantt, and the legend.
 
 import { $, escapeHtml, refreshIcons } from './dom.js';
-import { schedule, fmt, fmtDelta, fmtPercent, getCriticality, rollupForNode } from './schedule.js';
+import {
+  schedule, fmt, fmtDelta, fmtPercent, getCriticality, rollupForNode, isProjectCritical
+} from './schedule.js';
 import { getState, currentDiagram } from './state.js';
 import { dependenciesOf } from './cpm.js';
 import { linkBadgeHtml } from './links.js';
 import { orderedNodes } from './layout.js';
-import { CRITICAL_COLOR, NEAR_CRITICAL_COLOR, STATUS_COLORS, STATUS_LABELS } from './config.js';
+import { resourceLoad, UNASSIGNED } from './resources.js';
+import { CRITICAL_COLOR, NEAR_CRITICAL_COLOR, LATE_COLOR, STATUS_COLORS, STATUS_LABELS } from './config.js';
 
 let ganttOpen = false;
+let resourcesOpen = false;
+let resourceCapacity = 1;
 let highlightedIds = new Set();
 
 export function isGanttOpen() {
@@ -22,6 +27,25 @@ export function setGanttOpen(open) {
   btn.classList.toggle('tool-btn-active', open);
   btn.setAttribute('aria-pressed', String(open));
   if (open) renderGantt();
+}
+
+export function isResourcesOpen() {
+  return resourcesOpen;
+}
+
+export function setResourcesOpen(open) {
+  resourcesOpen = open;
+  $('resource-panel').classList.toggle('open', open);
+  const btn = $('btn-resources');
+  btn.classList.toggle('tool-btn-active', open);
+  btn.setAttribute('aria-pressed', String(open));
+  if (open) renderResources();
+}
+
+/** How many tasks one person is assumed able to hold at once. */
+export function setResourceCapacity(value) {
+  resourceCapacity = Math.max(1, Math.min(20, Number(value) || 1));
+  if (resourcesOpen) renderResources();
 }
 
 /**
@@ -41,6 +65,14 @@ export function highlightTasks(ids, { scrollIntoView = true } = {}) {
   if (first && scrollIntoView) {
     first.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
+}
+
+/** A deadline as the user set it: a date when the calendar is on, else a day. */
+export function dueLabel(node, calendar) {
+  if (node.mustFinishBy == null) return '';
+  return calendar.enabled
+    ? calendar.formatOffset(node.mustFinishBy)
+    : `day ${fmt(node.mustFinishBy)}`;
 }
 
 function statusChip(node) {
@@ -92,11 +124,30 @@ function rollupBlockHtml(rollup) {
     </div>`;
 }
 
+/** Named owner, so you can see at a glance who a card belongs to. */
+function assigneeChipHtml(node) {
+  const name = String(node.assignee || '').trim();
+  if (!name) return '';
+  return `<span class="assignee-chip" title="Assigned to ${escapeHtml(name)}"><i data-lucide="user" class="w-3 h-3" aria-hidden="true"></i>${escapeHtml(name)}</span>`;
+}
+
+/**
+ * On a sub-path page, "critical" on its own means critical *here*. It only
+ * matters to the delivery date if the branch above it is critical too, and the
+ * diagram would otherwise colour both the same red.
+ */
+function projectCriticalChipHtml(node) {
+  if (getState().activeView === 'main') return '';
+  if (!isProjectCritical(getState().activeView, node.id)) return '';
+  return '<span class="chain-chip" title="On the critical path of the whole project, not just this page"><i data-lucide="git-branch" class="w-3 h-3" aria-hidden="true"></i>drives Main</span>';
+}
+
 function taskCardHtml(node, ctx) {
   const { metrics, criticalIds, nearCritical, successors, calendar, drift } = ctx;
   const m = metrics[node.id] || {};
   const isCrit = criticalIds.has(node.id);
   const isNear = nearCritical.has(node.id);
+  const isLate = Number(m.slack) < 0;
   const deps = dependenciesOf(node);
   const succs = successors.get(node.id) || [];
   const criticality = getCriticality()?.get(node.id);
@@ -107,7 +158,7 @@ function taskCardHtml(node, ctx) {
     ? escapeHtml(d.id)
     : `${escapeHtml(d.id)}<span class="rel-tag">${escapeHtml(d.type)}${d.lag ? (d.lag > 0 ? '+' : '') + d.lag : ''}</span>`;
 
-  const edgeClass = isCrit ? 'card-critical' : isNear ? 'card-near-critical' : '';
+  const edgeClass = isLate ? 'card-late' : isCrit ? 'card-critical' : isNear ? 'card-near-critical' : '';
   const progress = Math.max(0, Math.min(100, Number(node.progress) || 0));
   // A task standing in for a sub-page does not own its own completion any
   // more — the sub-page's tasks decide it — so the slider goes away rather
@@ -123,7 +174,9 @@ function taskCardHtml(node, ctx) {
             <span class="task-id ${isCrit ? 'task-id-critical' : ''}">${escapeHtml(node.id)}</span>
             <span class="text-sm font-medium truncate">${escapeHtml(node.title)}</span>
             ${statusChip(node)}
+            ${assigneeChipHtml(node)}
             ${driftChip(taskDrift)}
+            ${projectCriticalChipHtml(node)}
             ${linkBadgeHtml(node)}
           </div>
           <p class="text-xs text-muted mt-1 line-clamp-2">${escapeHtml(node.description || 'No description')}</p>
@@ -142,9 +195,10 @@ function taskCardHtml(node, ctx) {
             ? `${escapeHtml(calendar.formatOffset(m.ES))} → ${escapeHtml(calendar.formatFinish(m.ES, m.duration))}`
             : `${fmt(m.ES)} / ${fmt(m.EF)}`}</div>
         </div>
-        <div class="stat-tile ${isCrit ? 'stat-critical' : isNear ? 'stat-near-critical' : ''}">
-          <div class="text-muted">Slack</div>
-          <div>${fmt(m.slack)}d${isCrit ? ' · CRITICAL' : isNear ? ' · AT RISK' : ''}</div>
+        <div class="stat-tile ${isLate ? 'stat-late' : isCrit ? 'stat-critical' : isNear ? 'stat-near-critical' : ''}"
+             ${node.mustFinishBy != null ? `title="Due by ${escapeHtml(dueLabel(node, calendar))}"` : ''}>
+          <div class="text-muted">${isLate ? 'Float' : 'Slack'}</div>
+          <div>${fmt(m.slack)}d${isLate ? ' · LATE' : isCrit ? ' · CRITICAL' : isNear ? ' · AT RISK' : ''}</div>
         </div>
       </div>
 
@@ -406,14 +460,101 @@ function renderGanttAxis(projectDuration, calendar) {
   ).join('');
 }
 
+// ─── Resource load ─────────────────────────────────────────
+
+/**
+ * One lane per person, over the same timeline as the Gantt. The schedule said
+ * when work *could* run but never whether anyone was free to run it, so three
+ * critical tasks could sit on one person in one week and the plan called
+ * itself feasible. Overloaded stretches are marked.
+ */
+export function renderResources() {
+  const panel = $('resource-panel');
+  const body = $('resource-body');
+  if (!resourcesOpen) {
+    panel.classList.remove('open');
+    return;
+  }
+  panel.classList.add('open');
+
+  const { metrics, projectDuration, nodes, calendar } = schedule();
+  if (!nodes.length || projectDuration <= 0) {
+    body.innerHTML = '<p class="text-xs text-muted">No schedule to analyse.</p>';
+    return;
+  }
+
+  const load = resourceLoad(nodes, metrics, { capacity: resourceCapacity });
+  const anyNamed = load.some(r => r.name !== UNASSIGNED);
+  if (!anyNamed) {
+    body.innerHTML = `
+      <p class="text-xs text-muted">
+        No tasks are assigned to anyone yet. Set <strong>Assigned to</strong> on a
+        task to see who is carrying what, and where they are double-booked.
+      </p>`;
+    return;
+  }
+
+  const scale = value => (value / projectDuration) * 100;
+  const when = (from, to) => calendar.enabled
+    ? `${calendar.formatOffset(from)} → ${calendar.formatFinish(from, to - from)}`
+    : `${fmt(from)}–${fmt(to)}d`;
+
+  body.innerHTML = load.map(person => {
+    const named = person.name !== UNASSIGNED;
+    const over = person.overloadedDays > 0;
+    return `
+      <div class="resource-row">
+        <div class="resource-name ${named ? '' : 'text-faint'}" title="${escapeHtml(named ? person.name : 'Not assigned to anyone')}">
+          ${escapeHtml(named ? person.name : 'Unassigned')}
+          <span class="resource-meta">${person.tasks.length} task${person.tasks.length === 1 ? '' : 's'}</span>
+        </div>
+        <div class="resource-track">
+          ${person.segments.map(s => `
+            <div class="resource-seg${s.over ? ' resource-over' : ''}"
+                 style="left:${scale(s.from)}%;width:${Math.max(0.6, scale(s.to - s.from))}%"
+                 title="${escapeHtml(`${s.ids.join(', ')} · ${when(s.from, s.to)}${s.over ? ` · ${s.count} at once` : ''}`)}">
+            </div>`).join('')}
+        </div>
+        <div class="resource-verdict ${over ? 'text-late' : 'text-muted'}">
+          ${over
+            ? `${fmt(person.overloadedDays)}d over`
+            : `${fmt(person.busyDays)}d busy`}
+        </div>
+      </div>`;
+  }).join('');
+}
+
 // ─── Summary and legend ────────────────────────────────────
 
 export function renderSummary() {
-  const { projectDuration, criticalIds, nearCritical, nodes, graph, calendar } = schedule();
+  const {
+    projectDuration, criticalIds, nearCritical, nodes, graph, calendar, deadline, overrun
+  } = schedule();
   const state = getState();
   const usable = nodes.length && !graph.cycleIds.length;
 
   $('sum-duration').textContent = usable ? projectDuration.toFixed(1) + 'd' : '—';
+
+  // Against a deadline, "how late" is the number that matters, and nothing on
+  // screen could express it before.
+  const late = $('sum-deadline');
+  late.classList.toggle('hidden', !usable || deadline == null);
+  if (usable && deadline == null) late.classList.add('hidden');
+  if (usable && deadline != null) {
+    const target = calendar.enabled ? calendar.formatOffset(deadline) : `day ${fmt(deadline)}`;
+    const value = $('sum-deadline-value');
+    if (overrun > 0) {
+      value.textContent = `${fmt(overrun)}d late`;
+      value.className = 'text-late font-medium';
+    } else if (overrun < 0) {
+      value.textContent = `${fmt(-overrun)}d spare`;
+      value.className = 'text-success font-medium';
+    } else {
+      value.textContent = 'exactly on time';
+      value.className = 'text-warning font-medium';
+    }
+    value.title = `Deadline: ${target}`;
+  }
   $('sum-critical').textContent = usable ? ([...criticalIds].join(', ') || 'none') : '—';
   $('sum-mode').textContent = state.estimationMode === 'pert' ? 'PERT' : 'Avg';
 
@@ -436,6 +577,9 @@ export function renderLegend() {
   if (!legend) return;
   const entries = [
     { color: CRITICAL_COLOR, label: 'Critical path (zero slack)' },
+    ...(getState().deadline != null
+      ? [{ color: LATE_COLOR, label: 'Late (negative float)' }]
+      : []),
     { color: NEAR_CRITICAL_COLOR, label: `At risk (slack ≤ ${getState().nearCriticalDays}d)` },
     ...Object.entries(STATUS_LABELS).map(([key, label]) => ({
       color: STATUS_COLORS[key], label, fill: true

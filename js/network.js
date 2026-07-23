@@ -1,13 +1,15 @@
 // vis-network canvas: data construction, drawing overlays, and interaction.
 
 import {
-  CRITICAL_COLOR, NEAR_CRITICAL_COLOR, TRACE_COLOR, SEARCH_COLOR, SELECTED_COLOR,
+  CRITICAL_COLOR, NEAR_CRITICAL_COLOR, LATE_COLOR, TRACE_COLOR, SEARCH_COLOR, SELECTED_COLOR,
   LANE_ID_PREFIX, STATUS_COLORS, MINIMAP_WIDTH, MINIMAP_HEIGHT,
   isLaneId, paletteFor
 } from './config.js';
 import { $, toast } from './dom.js';
 import { traceFrom, wouldCreateCycle, dependenciesOf, isDrivingLink } from './cpm.js';
-import { schedule, fmt, fmtPercent, getCriticality, rollupForNode } from './schedule.js';
+import {
+  schedule, fmt, fmtPercent, getCriticality, rollupForNode, isProjectCritical
+} from './schedule.js';
 import { getState, currentDiagram, allNodes, findNode, displayOpts } from './state.js';
 import { linkTooltip } from './links.js';
 import { columnGeometry } from './layout.js';
@@ -220,6 +222,9 @@ function borderFor(node, isCritical, isNearCritical, flags) {
   if (flags.isSource) return '#3b82f6';
   if (flags.isSelected) return SELECTED_COLOR;
   if (flags.isHit) return SEARCH_COLOR;
+  // Late outranks critical: everything late is critical too, and "past its
+  // deadline" is the more urgent of the two things to say.
+  if (flags.isLate) return LATE_COLOR;
   if (isCritical) return CRITICAL_COLOR;
   if (isNearCritical) return NEAR_CRITICAL_COLOR;
   if (flags.inTrace) return TRACE_COLOR;
@@ -246,12 +251,13 @@ function hexToRgb(hex) {
   return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : null;
 }
 
-function nodeStyle(node, isCritical, isNearCritical) {
+function nodeStyle(node, isCritical, isNearCritical, isLate = false) {
   const tracing = traceIds.size > 0;
   const inTrace = tracing && traceIds.has(node.id);
   const dimmed = tracing && !inTrace;
   const flags = {
     inTrace,
+    isLate,
     isHit: matchesSearch(node),
     isSelected: selectedIds.includes(node.id),
     isSource: connectMode && connectSource === node.id
@@ -272,11 +278,13 @@ function nodeStyle(node, isCritical, isNearCritical) {
     },
     shadow: emphasised
       ? { enabled: true, color: border, size: 18, x: 0, y: 0 }
-      : isCritical
-        ? { enabled: true, color: CRITICAL_COLOR, size: 16, x: 0, y: 0 }
-        : isNearCritical
-          ? { enabled: true, color: NEAR_CRITICAL_COLOR, size: 12, x: 0, y: 0 }
-          : { enabled: true, color: palette.shadow, size: 8, x: 0, y: 2 },
+      : isLate
+        ? { enabled: true, color: LATE_COLOR, size: 20, x: 0, y: 0 }
+        : isCritical
+          ? { enabled: true, color: CRITICAL_COLOR, size: 16, x: 0, y: 0 }
+          : isNearCritical
+            ? { enabled: true, color: NEAR_CRITICAL_COLOR, size: 12, x: 0, y: 0 }
+            : { enabled: true, color: palette.shadow, size: 8, x: 0, y: 2 },
     font: {
       color: dimmed ? palette.nodeTextDim : palette.nodeText,
       size: nodeFontSize(),
@@ -362,14 +370,22 @@ export function buildVisData() {
       ...(boxes
         ? { margin: 8, widthConstraint: { minimum: 150 } }
         : { size: Math.min(58, 32 + lineCount * 4) }),
-      ...nodeStyle(node, criticalIds.has(node.id), nearCritical.has(node.id)),
+      ...nodeStyle(node, criticalIds.has(node.id), nearCritical.has(node.id), metric.slack < 0),
       title: [
         `${node.title}`,
         node.description || '',
         linkTooltip(node).trim(),
         `Status: ${node.status || 'not_started'} · ${Math.round(node.progress || 0)}%`,
+        node.assignee ? `Assigned to: ${node.assignee}` : '',
         `Milestone: ${found?.milestone.title || '—'}`,
         `Duration used: ${fmt(metric.duration)}d`,
+        node.mustFinishBy != null
+          ? `Must finish by: ${calendar.enabled ? calendar.formatOffset(node.mustFinishBy) : `day ${fmt(node.mustFinishBy)}`}`
+          : '',
+        metric.slack < 0 ? `LATE by ${fmt(-metric.slack)}d — past its deadline` : '',
+        state.activeView !== 'main' && isProjectCritical(state.activeView, node.id)
+          ? 'On the critical path of the whole project'
+          : '',
         calendar.enabled
           ? `Dates: ${calendar.formatOffset(metric.ES)} → ${calendar.formatFinish(metric.ES, metric.duration)}`
           : '',
@@ -624,7 +640,7 @@ function restyleAll() {
   const { metrics, criticalIds, nearCritical, nodes, links } = schedule();
   nodesDS.update(nodes.map(n => ({
     id: n.id,
-    ...nodeStyle(n, criticalIds.has(n.id), nearCritical.has(n.id))
+    ...nodeStyle(n, criticalIds.has(n.id), nearCritical.has(n.id), metrics[n.id]?.slack < 0)
   })));
   edgesDS.update(
     links.filter(l => metrics[l.id]).map(l => ({ id: edgeId(l), ...edgeStyle(l, metrics, criticalIds) }))
@@ -856,6 +872,13 @@ export function fitView(duration = 400) {
     network.fit({ animation: { duration, easingFunction: 'easeInOutQuad' } });
     window.setTimeout(drawMinimap, duration + 30);
   }, 50);
+}
+
+/** Canvas coordinates at the middle of what the user is currently looking at. */
+export function viewCentre() {
+  if (!network) return { x: 0, y: 0 };
+  const position = network.getViewPosition();
+  return { x: Math.round(position.x), y: Math.round(position.y) };
 }
 
 export function zoomBy(factor) {

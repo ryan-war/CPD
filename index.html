@@ -57,6 +57,9 @@
           <button type="button" id="btn-gantt" data-secondary title="Toggle mini-Gantt" aria-pressed="false" class="tool-btn">
             <i data-lucide="bar-chart-3" class="w-3.5 h-3.5" aria-hidden="true"></i> Gantt
           </button>
+          <button type="button" id="btn-resources" data-secondary title="Toggle resource load — who is doing what, and when they are double-booked" aria-pressed="false" class="tool-btn">
+            <i data-lucide="users" class="w-3.5 h-3.5" aria-hidden="true"></i> Resources
+          </button>
           <button type="button" id="btn-monte" data-secondary title="Monte Carlo risk simulation" class="tool-btn">
             <i data-lucide="dices" class="w-3.5 h-3.5" aria-hidden="true"></i> Simulate
           </button>
@@ -108,6 +111,7 @@
         <span id="sum-finish" class="hidden">Finishes: <span id="sum-finish-date" class="value">—</span></span>
         <span>Critical Tasks: <span id="sum-critical" class="text-critical font-medium">—</span></span>
         <span id="sum-at-risk" class="hidden">At risk: <span id="sum-at-risk-ids" class="text-warning font-medium">—</span></span>
+        <span id="sum-deadline" class="hidden">Deadline: <span id="sum-deadline-value" class="value">—</span></span>
         <span>Mode: <span id="sum-mode" class="text-info font-medium">Avg</span></span>
         <span id="sum-mc" class="hidden">P50: <span id="sum-p50" class="value">—</span> · P80: <span id="sum-p80" class="text-warning font-medium">—</span> · P95: <span id="sum-p95" class="text-critical font-medium">—</span></span>
         <span class="text-faint hidden lg:inline">Ctrl+Z undo · hover traces dependencies · / search · 1–4 set status</span>
@@ -162,6 +166,11 @@
       <div id="bottom-panel">
         <p id="cycle-warning" class="hidden banner banner-warning shrink-0 mb-3" role="alert"></p>
 
+        <div id="restore-banner" class="hidden banner banner-info shrink-0 mb-3">
+          <span data-restore-text></span>
+          <button type="button" id="btn-discard-restore" class="link-btn">Start a fresh project</button>
+        </div>
+
         <div id="baseline-banner" class="hidden banner banner-info shrink-0 mb-3">
           <span data-baseline-text></span>
           <button type="button" id="btn-clear-baseline" class="link-btn">Clear baseline</button>
@@ -187,6 +196,20 @@
           </div>
           <div id="gantt-axis-wrap"><div id="gantt-axis"></div></div>
           <div id="gantt-body"></div>
+        </div>
+
+        <div id="resource-panel" class="mb-4 shrink-0 card p-3">
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <h3 class="text-xs font-semibold flex items-center gap-1.5">
+              <i data-lucide="users" class="w-3.5 h-3.5" aria-hidden="true"></i> Resource Load
+            </h3>
+            <label class="flex items-center gap-1.5 text-[10px] text-muted mb-0">
+              Tasks at once per person
+              <input id="resource-capacity" type="number" min="1" max="20" step="1" value="1"
+                     class="w-14" aria-label="How many tasks one person can hold at once" />
+            </label>
+          </div>
+          <div id="resource-body"></div>
         </div>
 
         <div id="milestones-container" class="space-y-4 flex-1 min-h-0"></div>
@@ -271,6 +294,19 @@
           <div>
             <label for="edit-progress">Progress (%)</label>
             <input id="edit-progress" type="number" min="0" max="100" step="1" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label for="edit-assignee">Assigned to</label>
+            <input id="edit-assignee" type="text" list="assignee-names" placeholder="Nobody" />
+            <datalist id="assignee-names"></datalist>
+          </div>
+          <div>
+            <label id="edit-due-label" for="edit-due">Must finish by</label>
+            <input id="edit-due" type="number" min="0" step="0.5" placeholder="No deadline" />
+            <p id="edit-due-hint" class="hint">Leave empty for none. Missing it shows negative float.</p>
           </div>
         </div>
 
@@ -405,6 +441,11 @@
               <label for="set-near-critical">At-risk slack (days)</label>
               <input id="set-near-critical" type="number" min="0" step="0.5" />
             </div>
+          </div>
+          <div class="mt-3">
+            <label id="set-deadline-label" for="set-deadline">Project deadline</label>
+            <input id="set-deadline" type="number" min="0" step="0.5" placeholder="No deadline" />
+            <p id="set-deadline-hint" class="hint">Leave empty for none. A deadline the plan misses turns float negative and reports how late it is.</p>
           </div>
           <div class="mt-3">
             <span class="field-label">Working days</span>

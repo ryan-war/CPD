@@ -13,8 +13,10 @@ import {
   indexGraph, scheduleSample
 } from '../js/cpm.js';
 import {
-  computeCpmLayout, orderedNodes, columnGeometry, columnRowHeight, columnRowOrigin
+  computeCpmLayout, orderedNodes, columnGeometry, columnRowHeight, columnRowOrigin,
+  freeSpotNear
 } from '../js/layout.js';
+import { resourceLoad, assigneeNames } from '../js/resources.js';
 import { createDefaultState, normalizeState, captureBaseline } from '../js/state.js';
 import { createCalendar, toISODate, parseISODate } from '../js/calendar.js';
 import { sampleTriangular, percentile, histogram } from '../js/simulate.js';
@@ -473,6 +475,15 @@ test('each milestone column is sized to its own widest task', () => {
   assert.equal(totalWidth, columns[0].width + columns[1].width);
 });
 
+test('a new task never lands on top of an existing one', () => {
+  const taken = [{ x: 0, y: 0 }, { x: 130, y: 0 }, { x: 0, y: 130 }, { x: 130, y: 130 }];
+  const spot = freeSpotNear(0, 0, taken, 130);
+  const clashes = taken.some(p =>
+    Math.abs(p.x - spot.x) < 130 && Math.abs(p.y - spot.y) < 130);
+  assert.equal(clashes, false);
+  assert.deepEqual(freeSpotNear(500, 500, taken, 130), { x: 500, y: 500 }, 'empty space is used as-is');
+});
+
 test('every column starts its rows at the same height', () => {
   const milestones = [
     { id: 'm1', nodes: [task('A', 1, 1), task('B', 1, 1), task('C', 1, 1)] },
@@ -485,6 +496,125 @@ test('every column starts its rows at the same height', () => {
   // The tallest column is centred, and the short one starts on the same row.
   assert.equal(origin, -rowHeight);
   assert.ok(rowHeight >= 100, 'rows clear the tallest task on the page');
+});
+
+// ─── Deadlines and negative float ──────────────────────────
+
+test('a deadline the plan already meets changes nothing', () => {
+  const nodes = [task('A', 4, 4), task('B', 2, 2, ['A'])];
+  const loose = schedule(nodes, { deadline: 20 });
+  const none = schedule(nodes);
+  assert.equal(loose.projectDuration, 6);
+  assert.equal(loose.metrics.A.slack, none.metrics.A.slack, 'no free float invented');
+  assert.deepEqual([...loose.criticalIds].sort(), ['A', 'B']);
+  assert.equal(loose.worstSlack, 0);
+});
+
+test('a deadline the plan misses drives float negative', () => {
+  const nodes = [task('A', 4, 4), task('B', 2, 2, ['A'])];
+  const r = schedule(nodes, { deadline: 4 });
+  assert.equal(r.projectDuration, 6, 'the schedule itself is unchanged');
+  assert.equal(r.metrics.B.LF, 4, 'the deadline pulls the latest finish back');
+  assert.equal(r.metrics.B.slack, -2);
+  assert.equal(r.metrics.A.slack, -2, 'and propagates up the path');
+  assert.equal(r.worstSlack, -2, 'two days late');
+  assert.deepEqual([...r.criticalIds].sort(), ['A', 'B'], 'late tasks are still critical');
+});
+
+test('a task can be due before its path requires', () => {
+  const nodes = [
+    task('A', 2, 2),
+    task('B', 2, 2, ['A'], { mustFinishBy: 3 }),
+    task('C', 6, 6, ['A'])
+  ];
+  const r = schedule(nodes);
+  assert.equal(r.projectDuration, 8, 'C still sets the length');
+  assert.equal(r.metrics.B.LF, 3, 'B answers to its own date, not to C');
+  assert.equal(r.metrics.B.slack, -1);
+  assert.equal(r.metrics.C.slack, 0, 'and does not drag C down with it');
+});
+
+test('an unset or malformed deadline is ignored', () => {
+  const nodes = [task('A', 4, 4)];
+  for (const deadline of [null, undefined, NaN, 'soon', -3]) {
+    assert.equal(schedule(nodes, { deadline }).metrics.A.slack, 0, String(deadline));
+  }
+});
+
+// ─── Resources ─────────────────────────────────────────────
+
+const loadOf = (nodes, options) => {
+  const { metrics } = computeCPM(nodes, { mode: 'average' });
+  return resourceLoad(nodes, metrics, options);
+};
+
+test('overlapping tasks on one person are flagged, sequential ones are not', () => {
+  const sequential = loadOf([
+    task('A', 4, 4, [], { assignee: 'Sam' }),
+    task('B', 4, 4, ['A'], { assignee: 'Sam' })
+  ]);
+  assert.equal(sequential[0].peak, 1);
+  assert.equal(sequential[0].overloadedDays, 0, 'B starts exactly as A ends');
+  assert.equal(sequential[0].busyDays, 8);
+
+  const parallel = loadOf([
+    task('A', 4, 4, [], { assignee: 'Sam' }),
+    task('B', 4, 4, [], { assignee: 'Sam' })
+  ]);
+  assert.equal(parallel[0].peak, 2);
+  assert.equal(parallel[0].overloadedDays, 4);
+});
+
+test('capacity decides what counts as overloaded', () => {
+  const nodes = ['A', 'B', 'C'].map(id => task(id, 5, 5, [], { assignee: 'Sam' }));
+  assert.equal(loadOf(nodes, { capacity: 1 })[0].overloadedDays, 5);
+  assert.equal(loadOf(nodes, { capacity: 2 })[0].overloadedDays, 5);
+  assert.equal(loadOf(nodes, { capacity: 3 })[0].overloadedDays, 0);
+});
+
+test('load is split by person and the unassigned pool sorts last', () => {
+  const load = loadOf([
+    task('A', 4, 4, [], { assignee: 'Sam' }),
+    task('B', 4, 4, [], { assignee: 'Ada' }),
+    task('C', 4, 4, [], { assignee: 'Ada' }),
+    task('D', 4, 4)
+  ]);
+  assert.deepEqual(load.map(r => r.name), ['Ada', 'Sam', '']);
+  assert.equal(load[0].peak, 2, 'Ada has two at once');
+  assert.equal(load[1].peak, 1);
+});
+
+test('adjacent segments reporting the same load are merged', () => {
+  // Three tasks end at different times, but nobody is ever doubled up.
+  const load = loadOf([
+    task('A', 2, 2, [], { assignee: 'Sam' }),
+    task('B', 3, 3, ['A'], { assignee: 'Sam' }),
+    task('C', 1, 1, ['B'], { assignee: 'Sam' })
+  ]);
+  assert.equal(load[0].segments.length, 1, 'one unbroken run of work');
+  assert.deepEqual(
+    { from: load[0].segments[0].from, to: load[0].segments[0].to, count: load[0].segments[0].count },
+    { from: 0, to: 6, count: 1 }
+  );
+});
+
+test('zero-length milestones do not create phantom load', () => {
+  const load = loadOf([task('M', 0, 0, [], { assignee: 'Sam' })]);
+  assert.deepEqual(load[0].segments, []);
+  assert.equal(load[0].busyDays, 0);
+});
+
+test('assignee names are collected across every page', () => {
+  const state = normalizeState({
+    diagrams: {
+      main: { milestones: [{ id: 'm', title: 'm', nodes: [task('A', 1, 1, [], { assignee: 'Sam' })] }] },
+      sub_1: { milestones: [{ id: 'm', title: 'm', nodes: [
+        task('B', 1, 1, [], { assignee: 'Ada' }),
+        task('C', 1, 1, [], { assignee: 'Sam' })
+      ] }] }
+    }
+  });
+  assert.deepEqual(assigneeNames(state.diagrams), ['Ada', 'Sam']);
 });
 
 // ─── Calendar ──────────────────────────────────────────────
@@ -525,6 +655,35 @@ test('finish date is the last day the task occupies', () => {
   assert.equal(toISODate(cal.finishDate(0, 5)), '2026-04-17');
   // A zero-length milestone reports its own day.
   assert.equal(toISODate(cal.finishDate(0, 0)), '2026-04-13');
+});
+
+test('dates convert back to working-day offsets', () => {
+  // 2026-04-13 is a Monday; the Wednesday is a holiday.
+  const cal = createCalendar({
+    startDate: '2026-04-13',
+    workdays: [1, 2, 3, 4, 5],
+    holidays: ['2026-04-15']
+  });
+
+  assert.equal(cal.dateToOffset('2026-04-13'), 0, 'the start date is offset zero');
+  assert.equal(cal.dateToOffset('2026-04-14'), 1);
+  assert.equal(cal.dateToOffset('2026-04-16'), 2, 'the holiday is not counted');
+  assert.equal(cal.dateToOffset('2026-04-20'), 4, 'the weekend is not counted');
+
+  // A deadline set on a non-working day means the end of the last working day
+  // before it, which is what "by Saturday" means for a plan that stops on
+  // Friday. The round trip lands there rather than on the date typed in.
+  assert.equal(cal.dateToOffset('2026-04-18'), 3);
+  assert.equal(toISODate(cal.offsetToDate(3)), '2026-04-17', 'Saturday reads back as the Friday');
+
+  assert.equal(cal.dateToOffset('2026-01-01'), 0, 'before the project starts is day zero');
+  assert.equal(cal.dateToOffset('not-a-date'), null);
+  assert.equal(cal.dateToOffset(null), null);
+
+  // Offsets survive a round trip on every ordinary working day.
+  for (let offset = 0; offset < 30; offset++) {
+    assert.equal(cal.dateToOffset(toISODate(cal.offsetToDate(offset))), offset, `offset ${offset}`);
+  }
 });
 
 test('dates parse and format without timezone drift', () => {

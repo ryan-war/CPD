@@ -116,12 +116,34 @@ export function createCalendar(settings = {}) {
     return offsetToDate(offset + Math.ceil(days) - 1);
   }
 
+  /**
+   * The inverse of `offsetToDate`: which working-day offset a real date falls
+   * on. Needed for deadlines, which people set as dates while the engine works
+   * in offsets. A date before the project start is offset 0; a non-working day
+   * reports the next working day, so "by Saturday" means "by Friday's end".
+   */
+  function dateToOffset(value) {
+    const target = parseISODate(value);
+    if (!target) return null;
+    if (target <= origin) return 0;
+    if (!workdays.size) return Math.round((target - origin) / DAY_MS);
+
+    let cursor = origin;
+    let offset = 0;
+    for (let guard = 0; guard < 100000 && cursor < target; guard++) {
+      cursor = addDays(cursor, 1);
+      if (isWorkingDay(cursor)) offset++;
+    }
+    return offset;
+  }
+
   return {
     enabled: !!config.enabled,
     config,
     origin,
     isWorkingDay,
     offsetToDate,
+    dateToOffset,
     finishDate,
     format: date => formatDate(date),
     formatOffset: offset => formatDate(offsetToDate(offset)),

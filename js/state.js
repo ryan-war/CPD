@@ -1,7 +1,7 @@
 // Project state: shape, validation, accessors, and undo/redo history.
 
 import { DEFAULT_DISPLAY, HISTORY_MAX } from './config.js';
-import { nodesOf, toDependency, predecessorIds, DEPENDENCY_TYPES } from './cpm.js';
+import { nodesOf, toDependency, predecessorIds, DEPENDENCY_TYPES, dayOrNull } from './cpm.js';
 import { DEFAULT_CALENDAR, toISODate, parseISODate } from './calendar.js';
 
 let state = createDefaultState();
@@ -23,6 +23,7 @@ export function createDefaultState() {
     theme: 'dark',
     nodeShape: 'circle',        // 'circle' | 'box' (activity-on-node notation)
     nearCriticalDays: 1,        // slack at or below this is flagged as at-risk
+    deadline: null,             // day offset the project must finish by
     calendar: { ...DEFAULT_CALENDAR },
     baseline: null,             // snapshot for planned-vs-actual comparison
     nodeDisplay: { ...DEFAULT_DISPLAY },
@@ -141,6 +142,9 @@ export function normalizeState(data) {
   if (data.theme !== 'light') data.theme = 'dark';
   if (data.nodeShape !== 'box') data.nodeShape = 'circle';
   data.nearCriticalDays = Math.max(0, numberOr(data.nearCriticalDays, 1));
+  // Deadlines are day offsets from the project start, like every other figure
+  // in the file. Null means none is set.
+  data.deadline = dayOrNull(data.deadline);
   data.calendar = normalizeCalendar(data.calendar);
   if (data.baseline && typeof data.baseline !== 'object') data.baseline = null;
   if (!data.pageTitles) data.pageTitles = {};
@@ -197,6 +201,8 @@ export function normalizeState(data) {
           byPredecessor.set(dep.id, dep);
         });
         n.dependencies = [...byPredecessor.values()];
+        n.mustFinishBy = dayOrNull(n.mustFinishBy);
+        n.assignee = String(n.assignee || '').trim();
         if (!n.position || typeof n.position !== 'object') n.position = { x: 0, y: 0 };
         n.position = { x: numberOr(n.position.x, 0), y: numberOr(n.position.y, 0) };
         if (n.linkedSubPage === undefined) n.linkedSubPage = null;

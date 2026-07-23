@@ -6,6 +6,18 @@
 
 const EPSILON = 1e-9;
 
+/**
+ * A day offset, or null when there is none.
+ *
+ * `Number(null)` is zero, so a plain numeric coercion turns "no deadline" into
+ * "due on day zero" and marks the whole project catastrophically late.
+ */
+export function dayOrNull(value) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 /** The four standard precedence relations. */
 export const DEPENDENCY_TYPES = ['FS', 'SS', 'FF', 'SF'];
 
@@ -394,6 +406,7 @@ export function computeCPM(nodes, options = {}) {
       metrics,
       projectDuration: 0,
       criticalIds: new Set(),
+      worstSlack: 0,
       order: [],
       cycleIds: graph.cycleIds,
       links
@@ -419,11 +432,18 @@ export function computeCPM(nodes, options = {}) {
     if (metrics[id].EF > projectDuration) projectDuration = metrics[id].EF;
   }
 
+  // A deadline earlier than the schedule pulls every latest-finish back with
+  // it, which is what turns float negative. A deadline the plan already meets
+  // is not applied: it would hand every task slack and empty the critical
+  // path, when the useful reading is still "what drives the finish".
+  const deadline = dayOrNull(options.deadline);
+  const limit = deadline != null ? Math.min(projectDuration, deadline) : projectDuration;
+
   for (let i = graph.order.length - 1; i >= 0; i--) {
     const n = metrics[graph.order[i]];
     const succ = graph.succs.get(n.id);
     if (!succ.length) {
-      n.LF = projectDuration;
+      n.LF = limit;
     } else {
       let finish = Infinity;
       for (const s of succ) {
@@ -433,17 +453,29 @@ export function computeCPM(nodes, options = {}) {
       }
       n.LF = finish;
     }
+    // A task of its own can be due before the path would otherwise require.
+    const own = dayOrNull(n.mustFinishBy);
+    if (own != null && own < n.LF) n.LF = own;
+
     n.LS = n.LF - n.duration;
     n.slack = +(n.LS - n.ES).toFixed(4);
     if (Math.abs(n.slack) < EPSILON) n.slack = 0;
   }
 
+  // Zero float is critical; negative float is critical *and* already late.
+  // Testing `<= 0` rather than `=== 0` keeps the no-deadline result identical.
   const criticalIds = new Set();
+  let worstSlack = 0;
   for (const id of graph.order) {
-    if (metrics[id].slack === 0) criticalIds.add(id);
+    const { slack } = metrics[id];
+    if (slack <= 0) criticalIds.add(id);
+    if (slack < worstSlack) worstSlack = slack;
   }
 
-  return { metrics, projectDuration, criticalIds, order: graph.order, cycleIds: [], links };
+  return {
+    metrics, projectDuration, criticalIds, worstSlack,
+    order: graph.order, cycleIds: [], links
+  };
 }
 
 /**

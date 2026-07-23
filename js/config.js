@@ -2,6 +2,8 @@
 
 export const CRITICAL_COLOR = '#ff4d4d';
 export const NEAR_CRITICAL_COLOR = '#f59e0b';
+/** Negative float — past a deadline, not merely driving the finish. */
+export const LATE_COLOR = '#c026d3';
 export const TRACE_COLOR = '#a78bfa';
 export const SEARCH_COLOR = '#38bdf8';
 export const SELECTED_COLOR = '#22d3ee';

@@ -308,6 +308,30 @@ export function columnRowHeight(milestones, sizeOf) {
 }
 
 /**
+ * A free spot near (x, y) for a newly added task.
+ *
+ * Every task added from the toolbar used to land on exactly (0, 0), so adding
+ * three in a row stacked them on top of each other with only the top one
+ * visible. Spirals outward until nothing else is within `spacing`.
+ */
+export function freeSpotNear(x, y, taken, spacing = 130) {
+  const clear = (px, py) => !taken.some(p =>
+    Math.abs(p.x - px) < spacing && Math.abs(p.y - py) < spacing);
+  if (clear(x, y)) return { x, y };
+
+  // Rings of eight, each further out than the last.
+  for (let ring = 1; ring <= 12; ring++) {
+    const step = spacing * ring;
+    for (const [dx, dy] of [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]]) {
+      const px = x + dx * step;
+      const py = y + dy * step;
+      if (clear(px, py)) return { x: px, y: py };
+    }
+  }
+  return { x, y };
+}
+
+/**
  * Y of the first row, shared by every column.
  *
  * Centring each column on its own contents was what broke the correspondence

@@ -2,25 +2,28 @@
 
 import { $, escapeHtml, toast, refreshIcons, closeAllModals } from './dom.js';
 import {
-  getState, normalizeState, seedHistory, commit, undo, redo, canUndo, canRedo,
-  currentDiagram, allNodes, findNode, pageTitle, nextNodeId, uid, displayOpts,
-  captureBaseline
+  getState, setState, createDefaultState, normalizeState, seedHistory, commit,
+  undo, redo, canUndo, canRedo, currentDiagram, allNodes, findNode, pageTitle,
+  nextNodeId, uid, displayOpts, captureBaseline
 } from './state.js';
 import {
   schedule, invalidateSchedule, clearCriticality, rollupForPage, fmtPercent
 } from './schedule.js';
 import { dependenciesOf, wouldCreateCycle, toDependency } from './cpm.js';
 import { followNodeLink, groupPagesByMainNode } from './links.js';
-import { computeCpmLayout, orderedNodes, columnRowHeight, columnRowOrigin } from './layout.js';
+import {
+  computeCpmLayout, orderedNodes, columnRowHeight, columnRowOrigin, freeSpotNear
+} from './layout.js';
 import {
   initNetwork, applyVisData, fitView, focusNode, redraw, savePositionsFromNetwork,
   setConnectMode, isConnectMode, getSelection, clearSelection, clearTrace,
   setSearchQuery, getSearchQuery, matchesSearch, refreshHighlights,
-  selectNodes, zoomBy, drawMinimap, getNetwork, nodeSizeOf, columnLayout
+  selectNodes, zoomBy, drawMinimap, getNetwork, nodeSizeOf, columnLayout, viewCentre
 } from './network.js';
 import {
   renderBottomPanel, renderGantt, renderSummary, renderLegend, clearMonteCarloSummary,
-  isGanttOpen, setGanttOpen, highlightTasks
+  isGanttOpen, setGanttOpen, highlightTasks,
+  renderResources, isResourcesOpen, setResourcesOpen, setResourceCapacity
 } from './panel.js';
 import {
   initModals, openNodeModal, closeNodeModal, saveNodeForm, addDependencyRow, removeDependencyRow,
@@ -32,8 +35,10 @@ import {
 } from './modals.js';
 import { saveJSON, exportPNG, exportCSV, bindFileInput } from './io.js';
 import { initSplitter, initCompactToolbar } from './layout-ui.js';
+import { scheduleSave, saveNow, readSaved, clearSaved, describeAge } from './storage.js';
 
 let toolbarMenu = null;
+let autosaveReady = false;
 
 // ─── Render ────────────────────────────────────────────────
 
@@ -53,9 +58,11 @@ function render({ fit = false } = {}) {
   updateTabUI();
   renderBottomPanel();
   renderGantt();
+  renderResources();
   renderLegend();
   updateHistoryButtons();
   updateCanvasEmptyState();
+  if (autosaveReady) scheduleSave(getState, message => toast(message, 'error'));
   if (fit) fitView();
 }
 
@@ -229,13 +236,24 @@ function newTask(id, x, y) {
   };
 }
 
+/**
+ * Somewhere visible and unoccupied. Adding from the toolbar always used the
+ * origin, which both stacked new tasks on top of each other and dropped them
+ * off-screen once you had panned away from it.
+ */
+function placeNewTask() {
+  const centre = viewCentre();
+  return freeSpotNear(centre.x, centre.y, allNodes().map(n => n.position || { x: 0, y: 0 }));
+}
+
 function addNodeAt(x, y) {
   const diagram = currentDiagram();
   if (!diagram.milestones.length) {
     diagram.milestones.push({ id: uid('m'), title: 'Phase 1', nodes: [] });
   }
+  const spot = (x == null || y == null) ? placeNewTask() : { x, y };
   const id = nextNodeId();
-  diagram.milestones[0].nodes.push(newTask(id, x || 0, y || 0));
+  diagram.milestones[0].nodes.push(newTask(id, spot.x, spot.y));
   onChange(null);
   openNodeModal(id);
 }
@@ -244,8 +262,8 @@ function addNodeToMilestone(msId) {
   const ms = currentDiagram().milestones.find(m => m.id === msId);
   if (!ms) return;
   const id = nextNodeId();
-  const count = allNodes().length;
-  ms.nodes.push(newTask(id, (count % 5) * 180, Math.floor(count / 5) * 120));
+  const spot = placeNewTask();
+  ms.nodes.push(newTask(id, spot.x, spot.y));
   onChange(null, { relayout: true });
   openNodeModal(id);
 }
@@ -435,13 +453,15 @@ function clearBaseline() {
 function wireToolbar() {
   $('btn-add-subpath').addEventListener('click', () => openSubpathModal(null));
   $('btn-connect').addEventListener('click', () => setConnectMode(!isConnectMode()));
-  $('btn-add-node').addEventListener('click', () => addNodeAt(0, 0));
+  $('btn-add-node').addEventListener('click', () => addNodeAt());
   $('btn-auto-layout').addEventListener('click', () => applyAutoLayout());
   $('btn-milestone-layout').addEventListener('click', () => applyMilestoneLayout());
   $('btn-fit').addEventListener('click', () => fitView(300));
   $('btn-undo').addEventListener('click', doUndo);
   $('btn-redo').addEventListener('click', doRedo);
   $('btn-gantt').addEventListener('click', () => setGanttOpen(!isGanttOpen()));
+  $('btn-resources').addEventListener('click', () => setResourcesOpen(!isResourcesOpen()));
+  $('resource-capacity').addEventListener('change', event => setResourceCapacity(event.target.value));
   $('btn-monte').addEventListener('click', openMonteModal);
   $('btn-save').addEventListener('click', saveJSON);
   $('btn-export-png').addEventListener('click', exportPNG);
@@ -451,9 +471,10 @@ function wireToolbar() {
   $('btn-add-milestone').addEventListener('click', () => openMilestoneModal(null));
   $('btn-baseline').addEventListener('click', setBaseline);
   $('btn-clear-baseline').addEventListener('click', clearBaseline);
+  $('btn-discard-restore').addEventListener('click', discardSavedWork);
   $('btn-zoom-in').addEventListener('click', () => zoomBy(1.25));
   $('btn-zoom-out').addEventListener('click', () => zoomBy(0.8));
-  $('btn-canvas-add').addEventListener('click', () => addNodeAt(0, 0));
+  $('btn-canvas-add').addEventListener('click', () => addNodeAt());
 
   $('btn-pert').addEventListener('click', () => {
     const state = getState();
@@ -487,6 +508,8 @@ function wireToolbar() {
   bindFileInput(() => {
     applyTheme();
     setGanttOpen(isGanttOpen());
+    // What is on screen is now the loaded file, not the restored session.
+    $('restore-banner').classList.add('hidden');
     render({ fit: true });
   });
 }
@@ -777,7 +800,7 @@ function wireKeyboard() {
         zoomBy(0.8);
         return;
       case 'n':
-        addNodeAt(0, 0);
+        addNodeAt();
         return;
       case 'c':
         if (!event.ctrlKey && !event.metaKey && !event.altKey) setConnectMode(!isConnectMode());
@@ -791,6 +814,21 @@ function wireKeyboard() {
       case '4': setStatusForSelection('done'); return;
       default:
     }
+  });
+}
+
+/**
+ * The debounced autosave can still have a write pending when the tab goes.
+ * `pagehide` fires on close, reload, and navigation away, including the
+ * bfcache path that `beforeunload` misses on mobile.
+ */
+function wireAutosaveFlush() {
+  const flush = () => {
+    if (autosaveReady) saveNow(getState);
+  };
+  window.addEventListener('pagehide', flush);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flush();
   });
 }
 
@@ -832,6 +870,55 @@ function showLoadError(message) {
   banner.classList.remove('hidden');
 }
 
+// ─── Autosave ──────────────────────────────────────────────
+
+/**
+ * Put back whatever was on screen when the tab was last closed.
+ *
+ * Restoring outright rather than asking first: the saved copy is what the user
+ * was working on, and a dialog in front of it on every visit would be noise.
+ * The banner offers the way back to a blank project, which is the rarer want.
+ */
+function restoreSavedWork() {
+  const saved = readSaved();
+  if (!saved) return;
+  try {
+    const restored = normalizeState(saved.state);
+    const untouched = JSON.stringify(restored) === JSON.stringify(normalizeState(createDefaultState()));
+    setState(restored);
+    // Saying "picked up where you left off" over a project identical to the
+    // one everyone starts with tells the user nothing and looks like a bug.
+    if (!untouched) showRestoreBanner(saved.savedAt);
+  } catch {
+    // Written by an older or broken build: start clean rather than failing to
+    // boot, and drop it so it cannot fail again.
+    clearSaved();
+  }
+}
+
+function showRestoreBanner(savedAt) {
+  const banner = $('restore-banner');
+  banner.classList.remove('hidden');
+  banner.querySelector('[data-restore-text]').textContent =
+    `Picked up where you left off — autosaved ${describeAge(savedAt)}.`;
+}
+
+function discardSavedWork() {
+  if (!window.confirm('Discard this project and start a fresh one? Save JSON first if you want to keep it.')) return;
+  clearSaved();
+  setState(normalizeState(createDefaultState()));
+  seedHistory();
+  $('restore-banner').classList.add('hidden');
+  getState().baseline = null;
+  clearSelection();
+  clearTrace();
+  clearMonteCarloSummary();
+  clearCriticality();
+  applyTheme();
+  render({ fit: true });
+  toast('Started a fresh project', 'success');
+}
+
 function boot() {
   // Both libraries come from a CDN. Without this check a blocked or failed
   // request leaves a blank page and a console stack trace.
@@ -845,6 +932,7 @@ function boot() {
     return;
   }
 
+  restoreSavedWork();
   normalizeState(getState());
   seedHistory();
   applyTheme();
@@ -876,6 +964,7 @@ function boot() {
   wireKeyboard();
   wireProjectTitle();
   wireWindowResize();
+  wireAutosaveFlush();
   toolbarMenu = initCompactToolbar();
   initSplitter(() => redraw());
 
@@ -891,9 +980,13 @@ function boot() {
       commit();
       updateHistoryButtons();
       drawMinimap();
+      scheduleSave(getState);
     }
   });
 
+  // Only from here on: a save queued during boot would overwrite the restored
+  // project with a half-initialised one if anything above threw.
+  autosaveReady = true;
   render({ fit: true });
 }
 

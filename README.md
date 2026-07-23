@@ -5,8 +5,9 @@ and it computes the schedule as you go: earliest and latest start/finish, slack,
 and the critical path. Adds PERT estimation, working-day calendars, a Gantt
 timeline, Monte Carlo schedule risk analysis, and nested sub-path diagrams.
 
-No accounts, no server, no build step — static files and a browser. Projects are
-saved and loaded as JSON files you keep yourself.
+No accounts, no server, no build step — static files and a browser. Your work is
+kept in the browser between visits, and projects are saved and loaded as JSON
+files you keep yourself.
 
 ## Features
 
@@ -22,9 +23,19 @@ saved and loaded as JSON files you keep yourself.
 - **Working-day calendar** — set a project start date, working days, and
   holidays, and every figure can be read as a real date instead of a day
   number.
+- **Deadlines and negative float** — set a date for the project, or for a
+  single task. A deadline the plan misses pulls every latest-finish back with
+  it, so float goes negative and the schedule reports *how late it already is*
+  rather than merely which tasks are critical. A deadline the plan already
+  meets is left alone: it would otherwise hand every task float and empty the
+  critical path.
 - **At-risk highlighting** — tasks that are not critical but have little float
   are flagged separately, at a threshold you choose. Schedules slip through
   these far more often than through tasks already known to be critical.
+- **Resource load** — assign an owner to a task and see who is carrying what
+  over the project's timeline, with double-booked stretches marked. The
+  schedule says when work *can* run; this says whether anyone is free to run
+  it. Capacity is adjustable for people who genuinely do juggle.
 - **Sub-path pages** — link a task to its own diagram; the sub-path's project
   duration rolls up and replaces the parent task's estimate.
 - **Sub-path roll-up figures** — what each linked branch is actually worth:
@@ -33,6 +44,10 @@ saved and loaded as JSON files you keep yourself.
   appears on the page tab, the three figures on the parent task's card. A task
   standing in for a sub-page takes its progress from that page instead of a
   slider of its own.
+- **Critical path across pages** — a sub-path task can be critical on its own
+  page while the whole branch has float in Main, and colouring both the same
+  red says it matters when it does not. Tasks that drive the *project* — every
+  link in the chain critical, all the way up to Main — are marked separately.
 - **Baseline comparison** — snapshot the schedule, then see per-task and
   whole-project drift against it as things change.
 - **Cycle protection** — circular dependencies are rejected as you draw them,
@@ -66,6 +81,10 @@ saved and loaded as JSON files you keep yourself.
   box-shape diagrams do not overlap.
 - **Mini-Gantt** — timeline bars positioned by ES/EF with a real date axis,
   shaded by progress, critical and at-risk paths highlighted.
+- **Autosave** — the workspace is written to browser storage as you go and
+  restored on your next visit, with a banner saying when it was saved and a way
+  back to a blank project. Closing the tab is no longer destructive. JSON
+  export remains the way to keep, move, or share a project.
 - **Light and dark themes.**
 - **Dependency tracing** — hover a task to highlight everything upstream and
   downstream of it.
@@ -90,6 +109,8 @@ Open the published page, or serve the directory locally (see below).
 | Update progress | Drag the slider on the task card |
 | Reorder milestones | The arrows in the milestone header |
 | Follow a task's link | `Alt`-click (or `Cmd`-click) it |
+| Assign an owner | **Assigned to** on the task, then **Resources** |
+| Set a deadline | **Settings** for the project, or **Must finish by** on a task |
 
 ### Keyboard shortcuts
 
@@ -125,8 +146,8 @@ Any static server works. There is nothing to install and nothing to build.
 
 ### Tests
 
-The scheduling engine, calendar, layout, and simulation primitives are covered
-by tests with no dependencies beyond Node itself:
+The scheduling engine, calendar, layout, resource load, and simulation
+primitives are covered by tests with no dependencies beyond Node itself:
 
 ```sh
 node --test test/cpm.test.js
@@ -159,6 +180,7 @@ use in a spreadsheet.
   "theme": "dark",               // "dark" | "light"
   "nodeShape": "circle",         // "circle" | "box"
   "nearCriticalDays": 1,         // slack at or below this is flagged at-risk
+  "deadline": null,              // day offset the project must finish by
   "calendar": {
     "enabled": false,
     "startDate": "2026-04-13",
@@ -187,6 +209,8 @@ use in a spreadsheet.
               "max": 4,                  // pessimistic
               "progress": 100,
               "status": "done",          // not_started | in_progress | blocked | done
+              "assignee": "Ada",         // "" for nobody
+              "mustFinishBy": null,      // day offset this task is due by
               "dependencies": [
                 { "id": "Z", "type": "FS", "lag": 0 }  // FS | SS | FF | SF
               ],
@@ -203,8 +227,14 @@ use in a spreadsheet.
 }
 ```
 
-Note that state lives in memory only — reloading the page discards unsaved work.
-Export to JSON before closing the tab.
+Deadlines are stored as day offsets from the project start, like every other
+figure in the file. With the calendar switched on the interface shows and reads
+them as dates, converting through the working-day calendar; the stored value
+does not change.
+
+The workspace is also mirrored into `localStorage` under `cpd.workspace.v1` and
+restored on the next visit, so a closed tab is not a lost project. That copy is
+per-browser and per-device: export to JSON to keep, move, or share the work.
 
 ## Structure
 
@@ -218,6 +248,8 @@ js/calendar.js           working-day calendar — pure, no DOM
 js/layout.js             auto-layout and column geometry — pure, no DOM
 js/schedule.js           per-render schedule cache, at-risk set, baseline drift,
                          sub-path roll-up figures
+js/resources.js          assignee load and over-allocation — pure, no DOM
+js/storage.js            autosave to browser storage
 js/sampling.js           distributions and summary statistics
 js/simulate.js           Monte Carlo driver (worker, with inline fallback)
 js/simulate.worker.js    the simulation loop itself
@@ -232,8 +264,8 @@ js/config.js             constants and theme palettes
 test/cpm.test.js         engine, calendar, and migration tests
 ```
 
-`js/cpm.js`, `js/calendar.js`, and `js/layout.js` have no DOM dependency and
-can be imported directly in Node:
+`js/cpm.js`, `js/calendar.js`, `js/layout.js`, and `js/resources.js` have no DOM
+dependency and can be imported directly in Node:
 
 ```sh
 node --input-type=module -e "

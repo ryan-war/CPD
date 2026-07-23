@@ -92,9 +92,10 @@ export function exportCSV() {
   const useDates = calendar.enabled;
 
   const header = [
-    'Page', 'Milestone', 'Task ID', 'Title', 'Description', 'Status', 'Progress %',
+    'Page', 'Milestone', 'Task ID', 'Title', 'Description', 'Assigned To',
+    'Status', 'Progress %',
     'Optimistic', 'Most Likely', 'Pessimistic', 'Duration',
-    'ES', 'EF', 'LS', 'LF', 'Slack', 'Critical',
+    'ES', 'EF', 'LS', 'LF', 'Slack', 'Critical', 'Late', 'Must Finish By',
     ...(useDates ? ['Start Date', 'Finish Date'] : []),
     'Predecessors', 'Linked Sub-Page', 'Linked Main Task'
   ];
@@ -106,7 +107,12 @@ export function exportCSV() {
     if (!diagram) return;
     const nodes = nodesOf(diagram);
     if (!nodes.length) return;
-    const { metrics, criticalIds } = computeCPM(nodes, { mode: state.estimationMode, rollup });
+    const { metrics, criticalIds } = computeCPM(nodes, {
+      mode: state.estimationMode,
+      rollup,
+      // Only Main answers to the project deadline, exactly as on screen.
+      deadline: pageId === 'main' ? state.deadline : null
+    });
 
     (diagram.milestones || []).forEach(ms => {
       (ms.nodes || []).forEach(node => {
@@ -117,6 +123,7 @@ export function exportCSV() {
           node.id,
           node.title,
           node.description || '',
+          node.assignee || '',
           node.status || 'not_started',
           Math.round(node.progress || 0),
           node.min,
@@ -125,6 +132,10 @@ export function exportCSV() {
           fmt(m.duration),
           fmt(m.ES), fmt(m.EF), fmt(m.LS), fmt(m.LF), fmt(m.slack),
           criticalIds.has(node.id) ? 'yes' : 'no',
+          m.slack < 0 ? 'yes' : 'no',
+          node.mustFinishBy == null
+            ? ''
+            : (useDates ? toISODate(calendar.offsetToDate(node.mustFinishBy)) : fmt(node.mustFinishBy)),
           ...(useDates
             ? [toISODate(calendar.offsetToDate(m.ES)), toISODate(calendar.finishDate(m.ES, m.duration))]
             : []),
