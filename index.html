@@ -68,6 +68,9 @@
           <button type="button" id="btn-evm" data-secondary title="Cost &amp; earned value — whether the plan is on budget, not just on time" aria-pressed="false" class="tool-btn">
             <i data-lucide="banknote" class="w-3.5 h-3.5" aria-hidden="true"></i> Cost
           </button>
+          <button type="button" id="btn-cc" data-secondary title="Critical Chain — schedule buffers and how much of them the work has eaten" aria-pressed="false" class="tool-btn">
+            <i data-lucide="gauge" class="w-3.5 h-3.5" aria-hidden="true"></i> Chain
+          </button>
           <button type="button" id="btn-monte" data-secondary title="Monte Carlo risk simulation" class="tool-btn">
             <i data-lucide="dices" class="w-3.5 h-3.5" aria-hidden="true"></i> Simulate
           </button>
@@ -252,6 +255,14 @@
           <div id="quality-body"></div>
         </div>
 
+        <div id="cc-panel" class="mb-4 shrink-0 card p-3">
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <h3 class="text-xs font-semibold flex items-center gap-1.5">
+              <i data-lucide="gauge" class="w-3.5 h-3.5" aria-hidden="true"></i> Critical Chain
+            </h3>
+          </div>
+          <div id="cc-body"></div>
+        </div>
         <div id="evm-panel" class="mb-4 shrink-0 card p-3">
           <div class="flex items-center justify-between gap-2 mb-2">
             <h3 class="text-xs font-semibold flex items-center gap-1.5">
@@ -650,6 +661,7 @@
           </button>
         </form>
 
+        <div id="scn-rank" class="scn-rank"></div>
         <div id="scn-list" class="scenario-list"></div>
         <div id="scn-compare" class="hidden scenario-compare"></div>
       </div>

@@ -2,10 +2,13 @@
 
 import { $, escapeHtml, toast, openModal, closeModal, isModalOpen } from './dom.js';
 import { getState, uid } from './state.js';
-import { snapshotState, mainSummary, compareScenario } from './scenarios.js';
+import { snapshotState, mainSummary, compareScenario, rankScenarios } from './scenarios.js';
 import { fmt, fmtDelta } from './schedule.js';
 
 let app = {};
+// What the list is ranked on: sooner finish, or lower forecast cost. Held across
+// re-renders so toggling the sort sticks while the modal is open.
+let rankBy = 'finish';
 // The scenario a comparison is currently shown for, so the list and the compare
 // panel stay in step across a re-render.
 let comparingId = null;
@@ -46,39 +49,102 @@ export function renderScenarios() {
   const current = mainSummary(getState());
   $('scn-current-dur').textContent = fmt(current.projectDuration) + 'd';
 
+  renderRankControls(items.length > 0);
+
   if (!items.length) {
     list.innerHTML = `<p class="hint px-1 py-2">
       No scenarios yet. Save the plan as it stands, change some estimates or
       dependencies, and compare to see what the change costs the finish date.</p>`;
   } else {
-    list.innerHTML = items.map(s => {
-      const summary = mainSummary(s.data);
-      const delta = +(summary.projectDuration - current.projectDuration).toFixed(4);
-      const deltaClass = delta > 0 ? 'text-late' : delta < 0 ? 'text-success' : 'text-muted';
-      const deltaText = delta === 0 ? 'same as current' : `${fmtDelta(delta)}d vs current`;
-      return `
-        <div class="scenario-row${s.id === comparingId ? ' scenario-row-active' : ''}">
-          <div class="scenario-meta">
-            <div class="scenario-name" title="Captured ${escapeHtml(new Date(s.capturedAt).toLocaleString())}">${escapeHtml(s.name)}</div>
-            <div class="scenario-sub">
-              <span>${fmt(summary.projectDuration)}d</span>
-              <span class="${deltaClass}">${escapeHtml(deltaText)}</span>
-            </div>
-          </div>
-          <div class="scenario-actions">
-            <button type="button" class="tool-btn" data-scn-compare="${escapeHtml(s.id)}">${s.id === comparingId ? 'Hide' : 'Compare'}</button>
-            <button type="button" class="tool-btn" data-scn-load="${escapeHtml(s.id)}" title="Replace the working plan with this scenario">Load</button>
-            <button type="button" class="tool-btn" data-scn-update="${escapeHtml(s.id)}" title="Overwrite this scenario with the current plan">Update</button>
-            <button type="button" class="icon-btn" data-scn-duplicate="${escapeHtml(s.id)}" aria-label="Duplicate ${escapeHtml(s.name)}"><i data-lucide="copy" class="w-3.5 h-3.5" aria-hidden="true"></i></button>
-            <button type="button" class="icon-btn" data-scn-rename="${escapeHtml(s.id)}" aria-label="Rename ${escapeHtml(s.name)}"><i data-lucide="pencil" class="w-3.5 h-3.5" aria-hidden="true"></i></button>
-            <button type="button" class="icon-btn icon-btn-danger" data-scn-delete="${escapeHtml(s.id)}" aria-label="Delete ${escapeHtml(s.name)}"><i data-lucide="trash-2" class="w-3.5 h-3.5" aria-hidden="true"></i></button>
-          </div>
-        </div>`;
-    }).join('');
+    // The live plan ranks alongside the scenarios, so the list says where "leave
+    // it as it is" sits rather than only ordering the alternatives among
+    // themselves. Its row carries no actions — you cannot load or delete now.
+    const ranked = rankScenarios(getState(), items, rankBy);
+    list.innerHTML = ranked
+      .map((e, i) => (e.isCurrent ? currentRowHtml(e, i) : scenarioRowHtml(e, i)))
+      .join('');
   }
 
   renderCompare();
   app.refreshIcons();
+}
+
+/** The Finish | Cost sort toggle, shown once there is a scenario to rank. */
+function renderRankControls(show) {
+  const host = $('scn-rank');
+  if (!host) return;
+  if (!show) { host.innerHTML = ''; return; }
+  const btn = (key, label) =>
+    `<button type="button" class="scn-rank-btn${rankBy === key ? ' scn-rank-btn-on' : ''}"
+       data-rank-by="${key}" aria-pressed="${rankBy === key}">${label}</button>`;
+  host.innerHTML =
+    `<span class="scn-rank-label">Rank by</span>${btn('finish', 'Finish')}${btn('eac', 'Cost')}`;
+}
+
+/** The rank position and the shared finish/cost line, for either kind of row. */
+const rankBadge = i => `<span class="scn-rank-pos">${i + 1}</span>`;
+
+function metricsHtml(e) {
+  const deltaClass = e.finishDelta > 0 ? 'text-late' : e.finishDelta < 0 ? 'text-success' : 'text-muted';
+  const deltaText = e.isCurrent
+    ? 'baseline'
+    : e.finishDelta === 0 ? 'same finish' : `${fmtDelta(e.finishDelta)}d vs current`;
+  const star = e.isBest ? '<span class="scn-best" title="Best on the current ranking">★</span>' : '';
+  return `
+    <div class="scenario-sub">
+      <span>${fmt(e.projectDuration)}d</span>
+      <span class="${deltaClass}">${escapeHtml(deltaText)}</span>
+      <span class="scn-eac" title="Forecast cost at completion (EAC)">${escapeHtml(money(e.eac))}</span>
+      ${star}
+    </div>`;
+}
+
+function currentRowHtml(e, i) {
+  return `
+    <div class="scenario-row scenario-row-current">
+      ${rankBadge(i)}
+      <div class="scenario-meta">
+        <div class="scenario-name">Current plan <span class="scn-live">live</span></div>
+        ${metricsHtml(e)}
+      </div>
+      <div class="scenario-actions"></div>
+    </div>`;
+}
+
+function scenarioRowHtml(e, i) {
+  return `
+    <div class="scenario-row${e.id === comparingId ? ' scenario-row-active' : ''}">
+      ${rankBadge(i)}
+      <div class="scenario-meta">
+        <div class="scenario-name" title="${escapeHtml(e.name)}">${escapeHtml(e.name)}</div>
+        ${metricsHtml(e)}
+      </div>
+      <div class="scenario-actions">
+        <button type="button" class="tool-btn" data-scn-compare="${escapeHtml(e.id)}">${e.id === comparingId ? 'Hide' : 'Compare'}</button>
+        <button type="button" class="tool-btn" data-scn-load="${escapeHtml(e.id)}" title="Replace the working plan with this scenario">Load</button>
+        <button type="button" class="tool-btn" data-scn-update="${escapeHtml(e.id)}" title="Overwrite this scenario with the current plan">Update</button>
+        <button type="button" class="icon-btn" data-scn-duplicate="${escapeHtml(e.id)}" aria-label="Duplicate ${escapeHtml(e.name)}"><i data-lucide="copy" class="w-3.5 h-3.5" aria-hidden="true"></i></button>
+        <button type="button" class="icon-btn" data-scn-rename="${escapeHtml(e.id)}" aria-label="Rename ${escapeHtml(e.name)}"><i data-lucide="pencil" class="w-3.5 h-3.5" aria-hidden="true"></i></button>
+        <button type="button" class="icon-btn icon-btn-danger" data-scn-delete="${escapeHtml(e.id)}" aria-label="Delete ${escapeHtml(e.name)}"><i data-lucide="trash-2" class="w-3.5 h-3.5" aria-hidden="true"></i></button>
+      </div>
+    </div>`;
+}
+
+/** A money figure with the project's symbol, or an em dash when there is none. */
+function money(value) {
+  if (value == null || Number.isNaN(value)) return '—';
+  const cur = getState().currency || '$';
+  return cur + Math.round(value).toLocaleString();
+}
+
+/** The Finish | Cost sort toggle changed which metric ranks the list. */
+export function handleRankClick(event) {
+  const btn = event.target.closest('button[data-rank-by]');
+  if (!btn) return;
+  const next = btn.dataset.rankBy === 'eac' ? 'eac' : 'finish';
+  if (next === rankBy) return;
+  rankBy = next;
+  renderScenarios();
 }
 
 function renderCompare() {

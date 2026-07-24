@@ -28,7 +28,8 @@ import {
   isGanttOpen, setGanttOpen, highlightTasks,
   renderResources, isResourcesOpen, setResourcesOpen, setResourceCapacity, getResourceCapacity,
   renderQuality, isQualityOpen, setQualityOpen, renderTagFilter,
-  renderEVM, isEvmOpen, setEvmOpen
+  renderEVM, isEvmOpen, setEvmOpen,
+  renderCriticalChain, isCCOpen, setCCOpen
 } from './panel.js';
 import { levelResources } from './resources.js';
 import {
@@ -41,7 +42,7 @@ import {
 } from './modals.js';
 import {
   initScenarios, openScenariosModal, closeScenariosModal, saveCurrentAsScenario,
-  handleScenarioClick, setCompareTarget
+  handleScenarioClick, setCompareTarget, handleRankClick
 } from './scenario-ui.js';
 import { saveJSON, exportPNG, exportSVG, exportCSV, bindFileInput } from './io.js';
 import { buildShareLink, decodeProject, sharedPayloadInUrl, MAX_LINK_LENGTH } from './share.js';
@@ -81,6 +82,7 @@ function render({ fit = false } = {}) {
   renderResources();
   renderQuality();
   renderEVM();
+  renderCriticalChain();
   renderLegend();
   updateHistoryButtons();
   updateCanvasEmptyState();
@@ -796,6 +798,7 @@ function wireToolbar() {
   $('btn-resources').addEventListener('click', () => setResourcesOpen(!isResourcesOpen()));
   $('btn-quality').addEventListener('click', () => setQualityOpen(!isQualityOpen()));
   $('btn-evm').addEventListener('click', () => setEvmOpen(!isEvmOpen()));
+  $('btn-cc').addEventListener('click', () => setCCOpen(!isCCOpen()));
   // A list of ids you cannot act on is just a reproach; clicking a finding
   // selects the tasks it names so you can go and look at them.
   $('quality-body').addEventListener('click', event => {
@@ -847,6 +850,7 @@ function wireToolbar() {
     saveCurrentAsScenario();
   });
   $('scn-list').addEventListener('click', handleScenarioClick);
+  $('scn-rank').addEventListener('click', handleRankClick);
   $('scn-compare').addEventListener('change', event => {
     const select = event.target.closest('[data-compare-target]');
     if (select) setCompareTarget(select.value);

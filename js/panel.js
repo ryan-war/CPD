@@ -11,6 +11,7 @@ import { orderedNodes } from './layout.js';
 import { resourceLoad, levelResources, UNASSIGNED } from './resources.js';
 import { assessSchedule } from './quality.js';
 import { projectEVM } from './evm.js';
+import { criticalChainReport } from './critical-chain.js';
 // network.js does not import this module, so this direction is not a cycle.
 import { getGhostNote, getActiveTags, clearActiveTags } from './network.js';
 import { tagsOf, tagCounts, matchesTags } from './tags.js';
@@ -20,6 +21,7 @@ let ganttOpen = false;
 let resourcesOpen = false;
 let qualityOpen = false;
 let evmOpen = false;
+let ccOpen = false;
 let resourceCapacity = 1;
 let highlightedIds = new Set();
 
@@ -915,6 +917,126 @@ export function renderEVM() {
         <tbody>${rows}</tbody>
       </table>
     </div>`;
+}
+
+// ─── Critical Chain ────────────────────────────────────────
+
+export function isCCOpen() {
+  return ccOpen;
+}
+
+export function setCCOpen(open) {
+  ccOpen = open;
+  $('cc-panel').classList.toggle('open', open);
+  const btn = $('btn-cc');
+  btn.classList.toggle('tool-btn-active', open);
+  btn.setAttribute('aria-pressed', String(open));
+  if (open) renderCriticalChain();
+}
+
+/** A plain stat tile — label over value — reusing the EVM tile styling. */
+function ccTile(label, text, help, cls = '') {
+  return `<div class="stat-tile ${cls}" title="${escapeHtml(help)}">
+    <div class="text-muted">${escapeHtml(label)}</div><div>${escapeHtml(text)}</div></div>`;
+}
+
+const ZONE_TILE = { green: 'stat-good', amber: 'stat-near-critical', red: 'stat-late' };
+
+/**
+ * The fever chart: buffer consumed (y) against how much of the chain is done
+ * (x), over three rising zones. Early buffer use is tolerated less, so the
+ * green/amber boundaries climb left to right — the same lines feverZone tests.
+ * Hand-built inline SVG, no library, and it scales with the panel width.
+ */
+function feverChart(consumption) {
+  const W = 100, H = 60;
+  const y = v => H - Math.max(0, Math.min(1, v)) * H;
+  const yA0 = y(0.25), yA1 = y(0.65);   // amber line: 0.25 + 0.40·complete
+  const yR0 = y(0.50), yR1 = y(0.00);   // red line:   0.50 + 0.50·complete
+  const cx = Math.max(0, Math.min(1, consumption.chainComplete)) * W;
+  const cy = y(Math.min(1, consumption.bufferConsumed));
+  const pct = v => Math.round(v * 100);
+  return `
+    <svg class="fever-chart" viewBox="0 0 ${W} ${H}" role="img"
+         aria-label="Buffer ${pct(consumption.bufferConsumed)}% consumed at ${pct(consumption.chainComplete)}% of the chain, ${consumption.zone} zone">
+      <polygon class="fever-green" points="0,${H} 0,${yA0} ${W},${yA1} ${W},${H}"/>
+      <polygon class="fever-amber" points="0,${yA0} ${W},${yA1} ${W},${yR1} 0,${yR0}"/>
+      <polygon class="fever-red" points="0,${yR0} ${W},${yR1} ${W},0 0,0"/>
+      <circle class="fever-dot zone-${consumption.zone}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3.2"/>
+    </svg>
+    <div class="fever-axis"><span>0% chain done</span><span>buffer consumed ↑</span><span>100%</span></div>`;
+}
+
+/**
+ * Critical Chain for the current page: the project buffer pooled from the chain
+ * tasks' safety, a feeding buffer at each merge, and — with a reporting date and
+ * a baseline — how much of the project buffer the forecast slip has eaten, on a
+ * fever chart. Missing inputs are named rather than drawn as a false zero.
+ */
+export function renderCriticalChain() {
+  const panel = $('cc-panel');
+  const body = $('cc-body');
+  if (!ccOpen) {
+    panel.classList.remove('open');
+    return;
+  }
+  panel.classList.add('open');
+
+  const s = schedule();
+  if (!s.nodes.length) {
+    body.innerHTML = '<p class="text-xs text-muted">Nothing to chain on this page yet.</p>';
+    return;
+  }
+
+  const report = criticalChainReport(s, getState().baseline);
+  if (!report.chainIds.length) {
+    body.innerHTML = '<p class="text-xs text-muted">No critical chain — the network has a cycle, or nothing is scheduled yet.</p>';
+    return;
+  }
+
+  const consumed = report.consumption;
+  const remaining = consumed ? Math.max(0, report.projectBuffer * (1 - consumed.bufferConsumed)) : null;
+  const tiles = `
+    <div class="evm-tiles">
+      ${ccTile('Project buffer', fmt(report.projectBuffer) + 'd', 'Safety pooled from the chain tasks, by sum-of-squares')}
+      ${ccTile('Consumed', consumed ? fmtPercent(consumed.bufferConsumed) : '—', 'How much of the buffer the forecast slip has eaten', consumed ? ZONE_TILE[consumed.zone] : '')}
+      ${ccTile('Remaining', remaining == null ? '—' : fmt(remaining) + 'd', 'Buffer left before the finish date itself moves')}
+      ${ccTile('Feeding buffers', String(report.feeders.length), 'One at each point a side path merges into the chain')}
+    </div>`;
+
+  const notes = [];
+  if (report.projectBuffer === 0) {
+    notes.push('No task has a Min/Max spread, so there is no safety to pool. Widen optimistic/pessimistic estimates to size buffers.');
+  }
+  if (s.dataDate == null) {
+    notes.push('Buffer consumption needs a reporting date — set <strong>Reported as of</strong> in Settings.');
+  }
+  if (!getState().baseline) {
+    notes.push('Buffer consumption needs a baseline to measure the slip against — capture one with <strong>Set Baseline</strong>.');
+  }
+
+  const feederRows = report.feeders.length
+    ? report.feeders.map(f => `
+        <tr>
+          <td>${escapeHtml(f.mergeId)}</td>
+          <td>${f.pathIds.length}</td>
+          <td>${fmt(f.buffer)}d</td>
+        </tr>`).join('')
+    : '<tr><td colspan="3" class="hint">No side path feeds the chain — every task is on it.</td></tr>';
+
+  body.innerHTML = `
+    ${tiles}
+    ${consumed ? feverChart(consumed) : ''}
+    ${notes.length ? `<p class="hint evm-note">${notes.join('<br>')}</p>` : ''}
+    <div class="scenario-table-wrap">
+      <table class="scenario-table">
+        <thead><tr><th>Merge</th><th>Feeds</th><th>Buffer</th></tr></thead>
+        <tbody>${feederRows}</tbody>
+      </table>
+    </div>
+    <p class="hint">The chain is the critical path of the current schedule. For a
+    resource-feasible chain, clear any over-allocation in <strong>Resources</strong>
+    first — levelling writes the start constraints the chain then reflects.</p>`;
 }
 
 // ─── Summary and legend ────────────────────────────────────

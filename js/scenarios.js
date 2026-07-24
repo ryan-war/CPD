@@ -8,6 +8,7 @@
 // cannot: not "how far has it drifted" but "what would this change buy me".
 
 import { computeCPM, createRollup, nodesOf } from './cpm.js';
+import { projectEVM } from './evm.js';
 
 /**
  * A frozen copy of the plan for storing as a scenario.
@@ -112,4 +113,62 @@ export function compareScenario(currentData, scenarioData) {
     scenario: { projectDuration: scenario.projectDuration },
     tasks
   };
+}
+
+/**
+ * Rank the live plan and every scenario together on one metric, so a handful of
+ * what-ifs can be read at a glance rather than compared two at a time.
+ *
+ * The live plan is included as a synthetic entry (`isCurrent`), so the ranking
+ * says where "leave it as it is" sits among the alternatives rather than
+ * measuring against a plan that is not on the board. Sort is ascending — sooner,
+ * or cheaper, is better — and the leader on the active key is flagged `isBest`.
+ *
+ * `eac` is the earned-value forecast of final cost; it is null for a plan
+ * carrying no recorded actuals to forecast from. On the cost key those entries
+ * sort last and show "—": a ranking that invented a figure for them would put an
+ * unknown ahead of a known, which is exactly backwards.
+ *
+ * @param {object} currentData the live project
+ * @param {Array<{id:string,name:string,data:object}>} scenarioList saved scenarios
+ * @param {'finish'|'eac'} key metric to rank on
+ * @returns {Array<{id,name,isCurrent,projectDuration,finishDelta,eac,isBest}>}
+ */
+export function rankScenarios(currentData, scenarioList, key = 'finish') {
+  const entryFor = (id, name, data, isCurrent) => {
+    const { nodes, metrics, projectDuration } = mainSummary(data);
+    const evm = projectEVM(nodes, metrics, data.dataDate ?? null);
+    return {
+      id, name, isCurrent,
+      projectDuration,
+      eac: evm.EAC,          // null when there are no actuals to forecast from
+      finishDelta: 0,        // set below, once the live plan is the reference
+      isBest: false
+    };
+  };
+
+  const current = entryFor('current', 'Current plan', currentData, true);
+  const entries = [current].concat(
+    (Array.isArray(scenarioList) ? scenarioList : [])
+      .map(s => entryFor(s.id, s.name, s.data, false))
+  );
+
+  entries.forEach(e => { e.finishDelta = round(e.projectDuration - current.projectDuration); });
+
+  const rankKey = key === 'eac' ? 'eac' : 'finish';
+  const valueOf = e => (rankKey === 'eac' ? e.eac : e.projectDuration);
+  entries.sort((a, b) => {
+    const av = valueOf(a);
+    const bv = valueOf(b);
+    // A missing value (no EAC) sorts last, never ahead of a known figure.
+    if (av == null && bv == null) return String(a.name).localeCompare(String(b.name));
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return av - bv || String(a.name).localeCompare(String(b.name));
+  });
+
+  const best = entries.find(e => valueOf(e) != null);
+  if (best) best.isBest = true;
+
+  return entries;
 }
