@@ -226,6 +226,23 @@ export function rollupForNode(node) {
 }
 
 /**
+ * A task's status for display. A task standing in for a linked sub-page owns its
+ * status no more than it owns its progress — both come from the page below it:
+ * done when that page is complete, in progress when it is under way, not started
+ * when it is untouched. Tasks with no sub-page keep the status they were given.
+ * ("Blocked" cannot be inferred from completion, so a rolled-up task never
+ * reads as blocked — the same trade the rolled-up progress already makes.)
+ */
+export function effectiveStatus(node) {
+  const rollup = rollupForNode(node);
+  if (rollup && rollup.progress != null) {
+    const p = rollup.progress;
+    return p >= 100 ? 'done' : p > 0 ? 'in_progress' : 'not_started';
+  }
+  return node.status || 'not_started';
+}
+
+/**
  * Tasks that are not critical but have little float. Schedules slip through
  * these far more often than through the tasks already marked critical, and
  * nothing previously distinguished a task with half a day of slack from one

@@ -3,7 +3,7 @@
 import { $, toast } from './dom.js';
 import { APP_VERSION, SCHEMA_VERSION } from './config.js';
 import { getState, setState, normalizeState, seedHistory, pageTitle } from './state.js';
-import { fmt } from './schedule.js';
+import { fmt, effectiveStatus } from './schedule.js';
 import {
   dependenciesOf, nodesOf, computeCPM, createRollup, createProgressRollup
 } from './cpm.js';
@@ -180,7 +180,7 @@ export function exportCSV() {
           node.description || '',
           node.assignee || '',
           (node.tags || []).join('; '),
-          node.status || 'not_started',
+          effectiveStatus(node),
           Math.round(node.progress || 0),
           taskBAC(node),
           taskAC(node) ?? '',

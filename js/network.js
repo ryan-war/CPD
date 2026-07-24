@@ -10,7 +10,7 @@ import {
   traceFrom, wouldCreateCycle, dependenciesOf, isDrivingLink, nodesOf, computeCPM
 } from './cpm.js';
 import {
-  schedule, fmt, fmtPercent, getCriticality, rollupForNode, isProjectCritical
+  schedule, fmt, fmtPercent, getCriticality, rollupForNode, isProjectCritical, effectiveStatus
 } from './schedule.js';
 import { getState, currentDiagram, allNodes, findNode, displayOpts, pageTitle } from './state.js';
 import { tagsOf, matchesTags } from './tags.js';
@@ -294,8 +294,9 @@ function borderFor(node, isCritical, isNearCritical, flags) {
 
 /** Status as a translucent wash over the node background. */
 function fillFor(node, dimmed) {
-  const status = STATUS_COLORS[node.status];
-  if (!status || node.status === 'not_started') return palette.nodeBg;
+  const state = effectiveStatus(node);
+  const status = STATUS_COLORS[state];
+  if (!status || state === 'not_started') return palette.nodeBg;
   return mix(palette.nodeBg, status, dimmed ? 0.08 : 0.22);
 }
 
@@ -437,7 +438,7 @@ export function buildVisData() {
         `${node.title}`,
         node.description || '',
         linkTooltip(node).trim(),
-        `Status: ${node.status || 'not_started'} · ${Math.round(node.progress || 0)}%`,
+        `Status: ${effectiveStatus(node)} · ${Math.round(node.progress || 0)}%`,
         node.assignee ? `Assigned to: ${node.assignee}` : '',
         tagsOf(node).length ? `Tags: ${tagsOf(node).join(', ')}` : '',
         Number(node.cost) > 0

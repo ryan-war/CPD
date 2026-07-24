@@ -2,7 +2,7 @@
 
 import { $, escapeHtml, refreshIcons } from './dom.js';
 import {
-  schedule, fmt, fmtDelta, fmtPercent, getCriticality, rollupForNode, isProjectCritical
+  schedule, fmt, fmtDelta, fmtPercent, getCriticality, rollupForNode, isProjectCritical, effectiveStatus
 } from './schedule.js';
 import { getState, currentDiagram } from './state.js';
 import { dependenciesOf } from './cpm.js';
@@ -113,9 +113,25 @@ function floatTitle(node, m, calendar) {
   return parts.join('\n');
 }
 
+/**
+ * With the calendar on, the finish date each estimate implies — so the O/M/P
+ * range reads as a spread of dates, not just a spread of days. Empty when the
+ * calendar is off; then the tile carries no tooltip.
+ */
+function estimateFinishTitle(node, m, calendar) {
+  if (!calendar.enabled || m.ES == null) return '';
+  const likely = node.likely != null ? node.likely : (Number(node.min) + Number(node.max)) / 2;
+  const fin = d => calendar.formatFinish(m.ES, Number(d));
+  return `Finishes — O ${fin(node.min)} · M ${fin(likely)} · P ${fin(node.max)}`;
+}
+
 function statusChip(node) {
-  const color = STATUS_COLORS[node.status] || STATUS_COLORS.not_started;
-  return `<span class="status-chip" style="--chip:${color}" title="${escapeHtml(STATUS_LABELS[node.status] || 'Not started')}">${escapeHtml(STATUS_LABELS[node.status] || 'Not started')}</span>`;
+  const status = effectiveStatus(node);
+  const color = STATUS_COLORS[status] || STATUS_COLORS.not_started;
+  const derived = status !== (node.status || 'not_started');
+  const label = STATUS_LABELS[status] || 'Not started';
+  const title = derived ? `${label} — from the linked sub-path` : label;
+  return `<span class="status-chip" style="--chip:${color}" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
 }
 
 function driftChip(drift) {
@@ -241,7 +257,7 @@ function taskCardHtml(node, ctx) {
       </div>
 
       <div class="grid grid-cols-3 gap-1.5 text-[10px]">
-        <div class="stat-tile">
+        <div class="stat-tile" title="${escapeHtml(estimateFinishTitle(node, m, calendar))}">
           <div class="text-muted">Duration</div>
           <div>${escapeHtml(node.min)} – ${escapeHtml(node.max)}d</div>
         </div>

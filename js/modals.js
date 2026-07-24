@@ -2,7 +2,7 @@
 
 import { $, escapeHtml, toast, openModal, closeModal, isModalOpen } from './dom.js';
 import { isLaneId, CRITICAL_COLOR, APP_VERSION, SCHEMA_VERSION } from './config.js';
-import { schedule, setCriticality } from './schedule.js';
+import { schedule, setCriticality, rollupForNode, effectiveStatus } from './schedule.js';
 import { runMonteCarlo, histogram } from './simulate.js';
 import {
   DEPENDENCY_TYPES, DEPENDENCY_LABELS, dependenciesOf, toDependency, dayOrNull
@@ -15,9 +15,37 @@ import {
 } from './state.js';
 
 let app = {};
+// The earliest start of the task being edited, so the estimate fields can show
+// the finish date each one implies as they are typed, without re-scheduling.
+let editingES = null;
 
 export function initModals(callbacks) {
   app = callbacks;
+  // Recompute the implied finish dates live as the estimates change.
+  ['edit-min', 'edit-likely', 'edit-max'].forEach(id =>
+    $(id).addEventListener('input', updateEstimateDates));
+}
+
+/**
+ * With the calendar on, show what finish date each of the optimistic, likely,
+ * and pessimistic estimates lands on — the estimate is a duration, but a date
+ * is what a reader thinks in. Hidden when the calendar is off or the task has no
+ * scheduled start yet.
+ */
+function updateEstimateDates() {
+  const el = $('edit-estimate-dates');
+  const calendar = createCalendar(getState().calendar);
+  if (!calendar.enabled || editingES == null) {
+    el.classList.add('hidden');
+    el.textContent = '';
+    return;
+  }
+  const finish = value => {
+    const d = Number(value);
+    return Number.isFinite(d) ? calendar.formatFinish(editingES, d) : '—';
+  };
+  el.textContent = `Finishes — O: ${finish($('edit-min').value)} · M: ${finish($('edit-likely').value)} · P: ${finish($('edit-max').value)}`;
+  el.classList.remove('hidden');
 }
 
 // ─── Task ──────────────────────────────────────────────────
@@ -133,8 +161,30 @@ export function openNodeModal(nodeId) {
   $('edit-min').value = node.min;
   $('edit-likely').value = node.likely != null ? node.likely : (Number(node.min) + Number(node.max)) / 2;
   $('edit-max').value = node.max;
-  $('edit-status').value = node.status || 'not_started';
+
+  // Status: a task standing in for a sub-page takes its status from that page,
+  // like its progress does, so the control shows the derived value read-only
+  // rather than letting it be set to something the sub-path contradicts.
+  const rolled = rollupForNode(node);
+  const statusDerived = !!(rolled && rolled.progress != null);
+  const statusSel = $('edit-status');
+  const statusHint = $('edit-status-hint');
+  if (statusDerived) {
+    statusSel.value = effectiveStatus(node);
+    statusSel.disabled = true;
+    statusHint.textContent = 'Set by the linked sub-path’s completion.';
+    statusHint.classList.remove('hidden');
+  } else {
+    statusSel.value = node.status || 'not_started';
+    statusSel.disabled = false;
+    statusHint.classList.add('hidden');
+  }
+
   $('edit-progress').value = node.progress != null ? node.progress : 0;
+
+  // The finish dates the estimates imply, refreshed for this task's start.
+  editingES = schedule().metrics[node.id]?.ES ?? null;
+  updateEstimateDates();
   $('edit-assignee').value = node.assignee || '';
   $('assignee-names').innerHTML = assigneeNames(getState().diagrams)
     .map(name => `<option value="${escapeHtml(name)}"></option>`).join('');
