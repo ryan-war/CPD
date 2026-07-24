@@ -195,6 +195,11 @@ function centreOnCritical(layer, criticalIds) {
  * @param {{sizeOf?: (id: string) => {width: number, height: number}}} options
  * @returns {{positions: Object<string, {x: number, y: number}>, layers: string[][], ranks: Map}}
  */
+/** Height a virtual routing node reserves — a lane a long edge travels down. */
+const VIRTUAL_HEIGHT = 34;
+/** Virtual-node ids use a character no real task id can hold (a null byte). */
+const VIRTUAL_PREFIX = '\u0000v';
+
 export function computeCpmLayout(nodes, schedule = {}, options = {}) {
   const positions = {};
   if (!nodes.length) return { positions, layers: [], ranks: new Map() };
@@ -204,15 +209,66 @@ export function computeCpmLayout(nodes, schedule = {}, options = {}) {
   const { sizeOf } = options;
 
   const ranks = rankNodes(nodes, graph);
-  const layers = bucketByRank(nodes, ranks, metrics);
-  const { preds, succs } = neighbourMaps(nodes, graph);
+  const known = new Set(nodes.map(n => n.id));
+  const maxRank = Math.max(0, ...ranks.values());
 
-  // Alternating sweeps: downward orders each rank by its predecessors,
-  // upward by its successors. Four passes is where the improvement flattens
-  // out on diagrams this size.
+  // Expand the graph with virtual routing nodes: an edge spanning more than one
+  // rank is broken into a chain through a placeholder on every rank between its
+  // ends. Those placeholders take part in the ordering and reserve a slot when
+  // the ranks are laid out, so the straight edge travels down an empty lane
+  // rather than being drawn across the tasks that sit between its endpoints —
+  // which is what made long arrows cut through nodes.
+  const layers = Array.from({ length: maxRank + 1 }, () => []);
+  const succs = new Map();
+  const preds = new Map();
+  const esKey = new Map();
+  const virtual = new Set();
+  const ensure = id => { if (!succs.has(id)) succs.set(id, []); if (!preds.has(id)) preds.set(id, []); };
+
+  nodes.forEach(n => {
+    ensure(n.id);
+    layers[ranks.get(n.id) ?? 0].push(n.id);
+    esKey.set(n.id, Number(metrics?.[n.id]?.ES) || 0);
+  });
+
+  let vcount = 0;
+  nodes.forEach(n => {
+    const deps = graph?.deps?.get(n.id) || dependenciesOf(n);
+    const rv = ranks.get(n.id) ?? 0;
+    deps.forEach(d => {
+      if (!known.has(d.id)) return;
+      const ru = ranks.get(d.id) ?? 0;
+      if (rv - ru <= 1) {
+        succs.get(d.id).push(n.id);
+        preds.get(n.id).push(d.id);
+        return;
+      }
+      let prev = d.id;
+      const srcEs = esKey.get(d.id) || 0;
+      for (let r = ru + 1; r < rv; r++) {
+        const vid = `${VIRTUAL_PREFIX}${vcount++}`;
+        virtual.add(vid);
+        ensure(vid);
+        esKey.set(vid, srcEs);
+        layers[r].push(vid);
+        succs.get(prev).push(vid);
+        preds.get(vid).push(prev);
+        prev = vid;
+      }
+      succs.get(prev).push(n.id);
+      preds.get(n.id).push(prev);
+    });
+  });
+
+  // Seed each rank by earliest start, a virtual taking its edge's start.
+  layers.forEach(list =>
+    list.sort((a, b) => (esKey.get(a) - esKey.get(b)) || String(a).localeCompare(String(b))));
+
+  // Alternating sweeps over the expanded graph: downward orders each rank by its
+  // predecessors, upward by its successors. Six passes settles diagrams this size.
   let best = layers.map(layer => layer.slice());
   let bestScore = totalCrossings(layers, succs);
-  for (let pass = 0; pass < 4; pass++) {
+  for (let pass = 0; pass < 6; pass++) {
     barycenterSweep(pass % 2 === 0 ? layers : [...layers].reverse(),
       pass % 2 === 0 ? preds : succs);
     transposePass(layers, succs);
@@ -224,22 +280,25 @@ export function computeCpmLayout(nodes, schedule = {}, options = {}) {
   }
 
   const ordered = best.map(layer => centreOnCritical(layer, criticalIds));
+  const heightOf = id => virtual.has(id) ? VIRTUAL_HEIGHT : sizeFor(sizeOf, id).height;
 
-  // Column x from the widest node in each rank, so wide activity-on-node boxes
-  // get the room they need and circles do not sit in a sparse grid built for
-  // them.
+  // Column x from the widest real task in each rank; virtual nodes have no width.
   let x = 0;
   ordered.forEach((layer, i) => {
-    const width = Math.max(...layer.map(id => sizeFor(sizeOf, id).width));
+    const reals = layer.filter(id => !virtual.has(id));
+    const width = reals.length
+      ? Math.max(...reals.map(id => sizeFor(sizeOf, id).width))
+      : DEFAULT_SIZE.width;
     if (i > 0) x += width / 2;
     const columnX = x;
 
-    // Rows stack by real height, centred on the critical task's line at y = 0.
-    // A rank with nothing critical on it is centred on itself instead.
+    // Rows stack by height — real tasks by their own, virtuals by their lane —
+    // centred on the critical task's line at y = 0, or on the rank itself when
+    // nothing on it is critical.
     const offsets = [];
     let cursor = 0;
     layer.forEach(id => {
-      const span = sizeFor(sizeOf, id).height + ROW_MIN_GAP;
+      const span = heightOf(id) + ROW_MIN_GAP;
       offsets.push(cursor + span / 2);
       cursor += span;
     });
@@ -247,13 +306,14 @@ export function computeCpmLayout(nodes, schedule = {}, options = {}) {
     const centre = spineIndex >= 0 ? offsets[spineIndex] : cursor / 2;
 
     layer.forEach((id, j) => {
+      if (virtual.has(id)) return; // placeholders are not tasks; they only reserve space
       positions[id] = { x: columnX, y: Math.round(offsets[j] - centre) };
     });
 
     x += width / 2 + COLUMN_MIN_GAP;
   });
 
-  return { positions, layers: ordered, ranks };
+  return { positions, layers: ordered.map(l => l.filter(id => !virtual.has(id))), ranks };
 }
 
 // ─── Columns view ──────────────────────────────────────────
