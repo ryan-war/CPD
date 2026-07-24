@@ -12,6 +12,7 @@ import { resourceLoad, levelResources, UNASSIGNED } from './resources.js';
 import { assessSchedule } from './quality.js';
 import { projectEVM } from './evm.js';
 import { criticalChainReport } from './critical-chain.js';
+import { deriveRAG, effectiveRAG, riskSeverity } from './rag.js';
 // network.js does not import this module, so this direction is not a cycle.
 import { getGhostNote, getActiveTags, clearActiveTags } from './network.js';
 import { tagsOf, tagCounts, matchesTags } from './tags.js';
@@ -22,6 +23,9 @@ let resourcesOpen = false;
 let qualityOpen = false;
 let evmOpen = false;
 let ccOpen = false;
+let raidOpen = false;
+let raidTypeFilter = 'all';
+let raidShowClosed = false;
 let resourceCapacity = 1;
 let highlightedIds = new Set();
 
@@ -111,6 +115,53 @@ function floatTitle(node, m, calendar) {
     parts.push(`Due by ${offsetLabel(node.mustFinishBy, calendar)}`);
   }
   return parts.join('\n');
+}
+
+// ─── RAG status ────────────────────────────────────────────
+
+export const RAG_META = {
+  green: { label: 'Green', color: 'var(--success)' },
+  amber: { label: 'Amber', color: 'var(--warning)' },
+  red: { label: 'Red', color: 'var(--critical)' }
+};
+
+/** Open risks/issues in scope: all of them for the project, or those linked to a given task set. */
+function openRaidIn(taskIds) {
+  return (getState().raid || []).filter(e =>
+    e.status === 'open' && (e.type === 'risk' || e.type === 'issue') &&
+    (taskIds == null || (e.linkedTaskId && taskIds.has(e.linkedTaskId))));
+}
+
+/** The project's RAG: its derived value, the manual override, and what shows. */
+export function projectRag() {
+  const s = schedule();
+  const derived = deriveRAG(s.nodes, {
+    metrics: s.metrics, nearCritical: s.nearCritical, dataDate: s.dataDate,
+    overrun: s.overrun, openRaid: openRaidIn(null)
+  });
+  const override = getState().rag;
+  return { derived, override, effective: effectiveRAG(override, derived) };
+}
+
+/** One milestone's RAG, over just its tasks and the risks/issues linked to them. */
+function milestoneRag(ms) {
+  const s = schedule();
+  const ids = new Set((ms.nodes || []).map(n => n.id));
+  const derived = deriveRAG(ms.nodes || [], {
+    metrics: s.metrics, nearCritical: s.nearCritical, dataDate: s.dataDate,
+    overrun: null, openRaid: openRaidIn(ids)
+  });
+  return { derived, override: ms.rag, effective: effectiveRAG(ms.rag, derived) };
+}
+
+/** A RAG dot button that cycles its override on click. */
+function ragDotHtml(rag, dataAttr) {
+  const meta = RAG_META[rag.effective];
+  const title = rag.override
+    ? `Manual: ${meta.label}${rag.override !== rag.derived ? ` (auto was ${RAG_META[rag.derived].label})` : ''} — click to change`
+    : `Auto: ${meta.label} — click to override`;
+  return `<button type="button" class="rag-dot rag-${rag.effective}${rag.override ? ' rag-manual' : ''}"
+            ${dataAttr} title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"></button>`;
 }
 
 /**
@@ -392,7 +443,10 @@ export function renderBottomPanel() {
       const head = `
         <div class="swim-col-head" style="grid-column:${i + 1};grid-row:1">
           <div class="flex items-center justify-between gap-2">
-            <h3 class="text-xs font-semibold truncate" title="${escapeHtml(ms.title)}">${escapeHtml(ms.title)}</h3>
+            <div class="flex items-center gap-1.5 min-w-0">
+              ${ms.nodes && ms.nodes.length ? ragDotHtml(milestoneRag(ms), `data-ms-rag="${escapeHtml(ms.id)}"`) : ''}
+              <h3 class="text-xs font-semibold truncate" title="${escapeHtml(ms.title)}">${escapeHtml(ms.title)}</h3>
+            </div>
             ${milestoneActionsHtml(ms, i, total, true)}
           </div>
           <div class="ms-stats">${milestoneStatsHtml(ms, ctx)}</div>
@@ -409,7 +463,10 @@ export function renderBottomPanel() {
       <section class="milestone-section">
         <div class="milestone-head">
           <div class="min-w-0">
-            <h3 class="text-sm font-medium truncate">${escapeHtml(ms.title)}</h3>
+            <div class="flex items-center gap-1.5">
+              ${ms.nodes && ms.nodes.length ? ragDotHtml(milestoneRag(ms), `data-ms-rag="${escapeHtml(ms.id)}"`) : ''}
+              <h3 class="text-sm font-medium truncate">${escapeHtml(ms.title)}</h3>
+            </div>
             <div class="ms-stats">${milestoneStatsHtml(ms, ctx)}</div>
           </div>
           ${milestoneActionsHtml(ms, i, total, false)}
@@ -1055,6 +1112,113 @@ export function renderCriticalChain() {
     first — levelling writes the start constraints the chain then reflects.</p>`;
 }
 
+// ─── RAID log ──────────────────────────────────────────────
+
+const RAID_TYPES = { risk: 'Risk', assumption: 'Assumption', issue: 'Issue', dependency: 'Dependency' };
+const RAID_ABBR = { risk: 'R', assumption: 'A', issue: 'I', dependency: 'D' };
+
+export function isRaidOpen() {
+  return raidOpen;
+}
+
+export function setRaidOpen(open) {
+  raidOpen = open;
+  $('raid-panel').classList.toggle('open', open);
+  const btn = $('btn-raid');
+  btn.classList.toggle('tool-btn-active', open);
+  btn.setAttribute('aria-pressed', String(open));
+  if (open) renderRAID();
+}
+
+export function setRaidFilter(type) {
+  raidTypeFilter = (type === 'all' || RAID_TYPES[type]) ? type : 'all';
+  renderRAID();
+}
+
+export function setRaidShowClosed(on) {
+  raidShowClosed = !!on;
+  renderRAID();
+}
+
+/** A risk/issue severity as a labelled chip; empty for the other types. */
+function severityChip(entry) {
+  if (entry.type !== 'risk' && entry.type !== 'issue') return '';
+  const s = riskSeverity(entry);
+  if (!s) return '';
+  const tier = s >= 6 ? 'high' : s >= 3 ? 'medium' : 'low';
+  const label = tier[0].toUpperCase() + tier.slice(1);
+  return `<span class="raid-sev raid-sev-${tier}" title="Probability × impact">${label}</span>`;
+}
+
+/**
+ * The RAID register: risks, assumptions, issues, and dependencies the plan
+ * carries. Governance the schedule cannot infer — but an open High risk or
+ * Issue does feed the project RAG, so the log and the status agree.
+ */
+export function renderRAID() {
+  const panel = $('raid-panel');
+  const body = $('raid-body');
+  if (!raidOpen) {
+    panel.classList.remove('open');
+    return;
+  }
+  panel.classList.add('open');
+
+  const all = getState().raid || [];
+  const visibleOf = list => list.filter(e => raidShowClosed || e.status === 'open');
+
+  // Filter strip: a count per type, plus a show-closed toggle.
+  const count = key => (key === 'all'
+    ? visibleOf(all).length
+    : visibleOf(all).filter(e => e.type === key).length);
+  const chip = (key, label) =>
+    `<button type="button" class="raid-filter-chip${raidTypeFilter === key ? ' raid-filter-on' : ''}" data-raid-filter="${key}">${escapeHtml(label)}<span class="tag-toggle-count">${count(key)}</span></button>`;
+  $('raid-filter').innerHTML =
+    chip('all', 'All') + Object.entries(RAID_TYPES).map(([k, l]) => chip(k, l)).join('') +
+    `<label class="raid-closed-toggle"><input type="checkbox" data-raid-closed ${raidShowClosed ? 'checked' : ''}/> Show closed</label>`;
+
+  if (!all.length) {
+    body.innerHTML = `<p class="text-xs text-muted">
+      No RAID entries yet. Log the risks, assumptions, issues, and dependencies
+      the plan carries — an open High risk or Issue also colours the project RAG.</p>`;
+    return;
+  }
+
+  let entries = visibleOf(all);
+  if (raidTypeFilter !== 'all') entries = entries.filter(e => e.type === raidTypeFilter);
+  if (!entries.length) {
+    body.innerHTML = '<p class="text-xs text-muted">Nothing matches this filter.</p>';
+    return;
+  }
+
+  const calendar = schedule().calendar;
+  const rows = entries.map(e => {
+    const detail = e.type === 'dependency' && e.due != null
+      ? `due ${escapeHtml(offsetLabel(e.due, calendar))}`
+      : (severityChip(e) || '—');
+    const linked = e.linkedTaskId
+      ? `<button type="button" class="dep-chip" data-raid-goto="${escapeHtml(e.linkedTaskId)}" title="Go to task ${escapeHtml(e.linkedTaskId)}">${escapeHtml(e.linkedTaskId)}</button>`
+      : '<span class="text-faint">—</span>';
+    return `<tr class="${e.status === 'closed' ? 'raid-closed' : ''}">
+      <td><span class="raid-type raid-type-${e.type}" title="${escapeHtml(RAID_TYPES[e.type])}">${RAID_ABBR[e.type]}</span></td>
+      <td class="scenario-cell-title" title="${escapeHtml(e.description || e.title)}">${escapeHtml(e.title)}</td>
+      <td>${escapeHtml(e.owner || '—')}</td>
+      <td>${detail}</td>
+      <td>${e.status === 'open' ? 'open' : 'closed'}</td>
+      <td>${linked}</td>
+      <td class="raid-actions">
+        <button type="button" class="icon-btn" data-raid-edit="${escapeHtml(e.id)}" aria-label="Edit entry"><i data-lucide="pencil" class="w-3.5 h-3.5" aria-hidden="true"></i></button>
+        <button type="button" class="icon-btn icon-btn-danger" data-raid-del="${escapeHtml(e.id)}" aria-label="Delete entry"><i data-lucide="trash-2" class="w-3.5 h-3.5" aria-hidden="true"></i></button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  body.innerHTML = `<div class="scenario-table-wrap"><table class="scenario-table raid-table">
+    <thead><tr><th>Type</th><th>Title</th><th>Owner</th><th>Detail</th><th>Status</th><th>Task</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+  refreshIcons(body);
+}
+
 // ─── Summary and legend ────────────────────────────────────
 
 export function renderSummary() {
@@ -1064,6 +1228,22 @@ export function renderSummary() {
   } = schedule();
   const state = getState();
   const usable = nodes.length && !graph.cycleIds.length;
+
+  // Project RAG badge: derived from the plan, overridable by the PM on click.
+  const ragDot = $('rag-dot');
+  if (usable) {
+    const rag = projectRag();
+    const meta = RAG_META[rag.effective];
+    ragDot.className = `rag-dot rag-${rag.effective}${rag.override ? ' rag-manual' : ''}`;
+    $('rag-label').textContent = meta.label;
+    $('rag-badge').title = rag.override
+      ? `Project status — manual ${meta.label}${rag.override !== rag.derived ? ` (auto ${RAG_META[rag.derived].label})` : ''}. Click to change.`
+      : `Project status — auto ${meta.label}. Click to override.`;
+  } else {
+    ragDot.className = 'rag-dot';
+    $('rag-label').textContent = '—';
+    $('rag-badge').title = 'Project status';
+  }
 
   $('sum-duration').textContent = usable ? projectDuration.toFixed(1) + 'd' : '—';
 
@@ -1184,7 +1364,11 @@ export function renderLegend() {
       <span>${escapeHtml(e.label)}</span>
     </div>`).join('') + `
     <div class="legend-item"><span class="legend-line legend-dashed"></span><span>Non finish-to-start link</span></div>
-    <div class="legend-item"><span class="legend-line legend-solid"></span><span>Driving link</span></div>`;
+    <div class="legend-item"><span class="legend-line legend-solid"></span><span>Driving link</span></div>
+    <div class="legend-item">
+      <span class="rag-legend"><span class="rag-dot rag-green"></span><span class="rag-dot rag-amber"></span><span class="rag-dot rag-red"></span></span>
+      <span>RAG status (click to override)</span>
+    </div>`;
 }
 
 /**

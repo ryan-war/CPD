@@ -129,6 +129,20 @@ files you keep yourself.
   money and the dates agree; figures that need an input the plan lacks (a
   reporting date, a recorded actual) say so rather than reading as zero.
 
+### Governance
+
+- **RAG status** — a Red/Amber/Green indicator for the project (in the summary
+  strip) and for each milestone (a dot on its header). It is *derived* from the
+  plan's own signals — negative float or a missed deadline is Red, an at-risk
+  task or an SPI/CPI below 1 is Amber, and an open High risk or Issue escalates
+  it too — so the colour is grounded, not a guess. Click any RAG to override it
+  by hand (auto → red → amber → green → auto); the override wins and is marked.
+- **RAID log** — a register of Risks, Assumptions, Issues, and Dependencies,
+  each with an owner, an open/closed status, a probability × impact severity for
+  risks and issues, a due date for dependencies, and an optional link to a task
+  you can jump to. Open High risks and Issues feed the RAG, so the log and the
+  status agree.
+
 ### Sharing and export
 
 - **What-if scenarios** — save the whole plan under a name, change it, and
@@ -267,9 +281,16 @@ use in a spreadsheet.
 
 ```jsonc
 {
-  "schemaVersion": 3,            // saved-project format version
-  "appVersion": "1.2.0",        // build that wrote the file
+  "schemaVersion": 4,            // saved-project format version
+  "appVersion": "1.3.0",        // build that wrote the file
   "exportedAt": "2026-07-23T12:00:00.000Z",
+  "rag": null,                   // manual project RAG override, or null = derived
+  "raid": [                      // Risks, Assumptions, Issues, Dependencies
+    { "id": "raid_1", "type": "risk", "title": "Vendor may slip",
+      "owner": "Ada", "status": "open",
+      "probability": "high", "impact": "high",   // → severity, feeds the RAG
+      "due": null, "linkedTaskId": "C", "raisedAt": "2026-07-23T12:00:00.000Z" }
+  ],
   "projectTitle": "Critical Path Network",
   "currency": "$",               // symbol shown against cost figures
   "activeView": "main",
@@ -299,6 +320,7 @@ use in a spreadsheet.
         {
           "id": "m1",
           "title": "Phase 1: Planning",
+          "rag": null,             // manual milestone RAG override, or null = derived
           "nodes": [
             {
               "id": "A",
@@ -379,7 +401,9 @@ js/links.js              cross-page task links
 js/io.js                 JSON, CSV, and PNG export/import
 js/dom.js                escaping, toasts, focus management
 js/config.js             constants and theme palettes
-test/cpm.test.js         engine, calendar, and migration tests
+js/rag.js                RAG derivation — pure, no DOM
+js/raid-ui.js            RAID register dialog
+test/*.test.js           engine, calendar, migration, EVM, RAG, and more
 ```
 
 `js/cpm.js`, `js/calendar.js`, `js/layout.js`, `js/resources.js`, and

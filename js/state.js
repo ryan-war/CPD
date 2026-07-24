@@ -30,6 +30,8 @@ export function createDefaultState() {
     baseline: null,             // snapshot for planned-vs-actual comparison
     scenarios: [],              // saved what-if branches of the whole plan
     currency: '$',              // symbol shown against cost / earned-value figures
+    rag: null,                  // manual project RAG override, or null for derived
+    raid: [],                   // Risks, Assumptions, Issues, Dependencies register
     nodeDisplay: { ...DEFAULT_DISPLAY },
     pageOrder: ['main', 'sub_1', 'sub_2', 'sub_3'],
     pageTitles: {
@@ -176,6 +178,8 @@ export function normalizeState(data) {
   // A short symbol shown against costs. Kept tight so a hand-edited file cannot
   // put a paragraph where a "$" belongs.
   data.currency = String(data.currency ?? '$').trim().slice(0, 4) || '$';
+  // The project's manual RAG override, or null to let it be derived.
+  data.rag = normalizeRag(data.rag);
   if (!data.pageTitles) data.pageTitles = {};
   if (!Array.isArray(data.pageOrder)) {
     data.pageOrder = ['main', ...Object.keys(data.diagrams).filter(k => k !== 'main').sort()];
@@ -201,6 +205,7 @@ export function normalizeState(data) {
     diagram.milestones.forEach(ms => {
       if (!ms.id) ms.id = uid('m');
       ms.title = String(ms.title || 'Untitled milestone');
+      ms.rag = normalizeRag(ms.rag);
       if (!Array.isArray(ms.nodes)) ms.nodes = [];
       ms.nodes.forEach(n => {
         n.id = String(n.id ?? uid('N'));
@@ -273,7 +278,48 @@ export function normalizeState(data) {
     });
   });
 
+  // The RAID register, repaired against the tasks that actually exist now: a
+  // link to a deleted task is cleared rather than left dangling.
+  const allTaskIds = new Set();
+  Object.keys(data.diagrams).forEach(pageId =>
+    nodesOf(data.diagrams[pageId]).forEach(n => allTaskIds.add(n.id)));
+  data.raid = normalizeRaid(data.raid, allTaskIds);
+
   return data;
+}
+
+const RAG_VALUES = new Set(['green', 'amber', 'red']);
+
+/** A RAG override: one of the three levels, or null (meaning "derive it"). */
+function normalizeRag(value) {
+  return RAG_VALUES.has(value) ? value : null;
+}
+
+/**
+ * The RAID register from a loaded or hand-edited file, made safe: entries with
+ * no title are dropped (a register row that says nothing is noise), enums are
+ * coerced to known values, and a link to a task that no longer exists is
+ * cleared. Ids and the raised date are filled where missing.
+ */
+function normalizeRaid(input, taskIds) {
+  if (!Array.isArray(input)) return [];
+  const types = new Set(['risk', 'assumption', 'issue', 'dependency']);
+  const levels = new Set(['low', 'medium', 'high']);
+  return input
+    .filter(e => e && typeof e === 'object' && String(e.title ?? '').trim())
+    .map(e => ({
+      id: String(e.id || uid('raid')),
+      type: types.has(e.type) ? e.type : 'risk',
+      title: String(e.title).trim().slice(0, 200),
+      description: String(e.description || '').trim(),
+      owner: String(e.owner || '').trim(),
+      status: e.status === 'closed' ? 'closed' : 'open',
+      probability: levels.has(e.probability) ? e.probability : null,
+      impact: levels.has(e.impact) ? e.impact : null,
+      due: dayOrNull(e.due),
+      linkedTaskId: e.linkedTaskId && taskIds.has(e.linkedTaskId) ? e.linkedTaskId : null,
+      raisedAt: e.raisedAt || new Date().toISOString()
+    }));
 }
 
 function numberOr(value, fallback) {
@@ -293,7 +339,8 @@ function numberOr(value, fallback) {
  */
 const MIGRATIONS = {
   2: data => data, // 1 → 2: tags + scenarios, filled generically
-  3: data => data  // 2 → 3: cost / earned value, filled generically
+  3: data => data, // 2 → 3: cost / earned value, filled generically
+  4: data => data  // 3 → 4: RAG status + RAID log, filled generically
 };
 
 function runMigrations(data) {

@@ -29,9 +29,14 @@ import {
   renderResources, isResourcesOpen, setResourcesOpen, setResourceCapacity, getResourceCapacity,
   renderQuality, isQualityOpen, setQualityOpen, renderTagFilter,
   renderEVM, isEvmOpen, setEvmOpen,
-  renderCriticalChain, isCCOpen, setCCOpen
+  renderCriticalChain, isCCOpen, setCCOpen,
+  renderRAID, isRaidOpen, setRaidOpen, setRaidFilter, setRaidShowClosed
 } from './panel.js';
 import { levelResources } from './resources.js';
+import { nextOverride } from './rag.js';
+import {
+  initRaid, openRaidModal, closeRaidModal, saveRaidForm, deleteRaidFromModal, deleteRaidById
+} from './raid-ui.js';
 import {
   initModals, openNodeModal, closeNodeModal, saveNodeForm, addDependencyRow, removeDependencyRow,
   openEdgeModal, closeEdgeModal, saveEdgeForm, deleteEdge,
@@ -83,6 +88,7 @@ function render({ fit = false } = {}) {
   renderQuality();
   renderEVM();
   renderCriticalChain();
+  renderRAID();
   renderLegend();
   updateHistoryButtons();
   updateCanvasEmptyState();
@@ -685,6 +691,36 @@ function applyTagFilterView() {
   renderTagFilter();     // the filter strip's own pressed states
 }
 
+// ─── RAG override ──────────────────────────────────────────
+//
+// A click cycles the override auto → red → amber → green → auto. Overrides are
+// part of the project, so they take a history entry and are saved.
+
+function cycleProjectRag() {
+  getState().rag = nextOverride(getState().rag);
+  onChange(null);
+}
+
+function cycleMilestoneRag(msId) {
+  const ms = currentDiagram().milestones.find(m => m.id === msId);
+  if (!ms) return;
+  ms.rag = nextOverride(ms.rag);
+  onChange(null);
+}
+
+/** Open the page a RAID-linked task lives on and select it. */
+function raidGotoTask(taskId) {
+  const state = getState();
+  const pageId = (state.pageOrder || []).find(pid => findNode(taskId, state.diagrams[pid]));
+  if (!pageId) {
+    toast('That task no longer exists', 'info');
+    return;
+  }
+  if (pageId !== state.activeView) switchView(pageId);
+  selectNodes([taskId], { focus: true });
+  highlightTasks([taskId]);
+}
+
 // ─── Share link ────────────────────────────────────────────
 
 async function shareLink() {
@@ -798,7 +834,30 @@ function wireToolbar() {
   $('btn-resources').addEventListener('click', () => setResourcesOpen(!isResourcesOpen()));
   $('btn-quality').addEventListener('click', () => setQualityOpen(!isQualityOpen()));
   $('btn-evm').addEventListener('click', () => setEvmOpen(!isEvmOpen()));
+  $('rag-badge').addEventListener('click', cycleProjectRag);
   $('btn-cc').addEventListener('click', () => setCCOpen(!isCCOpen()));
+  $('btn-raid').addEventListener('click', () => setRaidOpen(!isRaidOpen()));
+  $('btn-add-raid').addEventListener('click', () => openRaidModal());
+  // RAID panel: filters, the show-closed toggle, and per-row edit/delete/jump.
+  $('raid-panel').addEventListener('click', event => {
+    const btn = event.target.closest('button');
+    if (!btn) return;
+    const { raidFilter, raidEdit, raidDel, raidGoto } = btn.dataset;
+    if (raidFilter) setRaidFilter(raidFilter);
+    else if (raidEdit) openRaidModal(raidEdit);
+    else if (raidDel) deleteRaidById(raidDel);
+    else if (raidGoto) raidGotoTask(raidGoto);
+  });
+  $('raid-panel').addEventListener('change', event => {
+    if (event.target.closest('[data-raid-closed]')) setRaidShowClosed(event.target.checked);
+  });
+  $('form-raid').addEventListener('submit', saveRaidForm);
+  $('modal-raid-close').addEventListener('click', closeRaidModal);
+  $('modal-raid-cancel').addEventListener('click', closeRaidModal);
+  $('btn-delete-raid').addEventListener('click', deleteRaidFromModal);
+  $('modal-raid').addEventListener('click', event => {
+    if (event.target.id === 'modal-raid') closeRaidModal();
+  });
   // A list of ids you cannot act on is just a reproach; clicking a finding
   // selects the tasks it names so you can go and look at them.
   $('quality-body').addEventListener('click', event => {
@@ -1010,7 +1069,7 @@ function wirePanelDelegation() {
   container.addEventListener('click', event => {
     const button = event.target.closest('button');
     if (button) {
-      const { editNode, gotoPage, gotoMain, addToMs, editMs, delMs, moveMs, dir, tag } = button.dataset;
+      const { editNode, gotoPage, gotoMain, addToMs, editMs, delMs, moveMs, dir, tag, msRag } = button.dataset;
       if (editNode) openNodeModal(editNode);
       else if (gotoPage) switchView(gotoPage);
       else if (gotoMain) followNodeLink({ linkedMainNode: gotoMain }, nav);
@@ -1020,6 +1079,8 @@ function wirePanelDelegation() {
       else if (moveMs) moveMilestone(moveMs, Number(dir));
       // A tag chip on a card toggles the same filter as the strip above.
       else if (tag) toggleTagFilter(tag);
+      // A milestone's RAG dot cycles its override on click.
+      else if (msRag) cycleMilestoneRag(msRag);
       return;
     }
     // Selecting a card selects the task on the diagram.
@@ -1383,6 +1444,10 @@ async function boot() {
     onReplace: newState => loadScenarioState(newState),
     refreshIcons: () => refreshIcons($('modal-scenarios'))
   });
+
+  // A RAID edit is an ordinary project change: history entry, full re-render (so
+  // the project/milestone RAG picks up a new open risk immediately).
+  initRaid({ onChange: message => onChange(message) });
 
   wireToolbar();
   wireDisplayMenu();

@@ -71,6 +71,9 @@
           <button type="button" id="btn-cc" data-secondary title="Critical Chain — schedule buffers and how much of them the work has eaten" aria-pressed="false" class="tool-btn">
             <i data-lucide="gauge" class="w-3.5 h-3.5" aria-hidden="true"></i> Chain
           </button>
+          <button type="button" id="btn-raid" data-secondary title="RAID log — Risks, Assumptions, Issues, Dependencies" aria-pressed="false" class="tool-btn">
+            <i data-lucide="clipboard-list" class="w-3.5 h-3.5" aria-hidden="true"></i> RAID
+          </button>
           <button type="button" id="btn-monte" data-secondary title="Monte Carlo risk simulation" class="tool-btn">
             <i data-lucide="dices" class="w-3.5 h-3.5" aria-hidden="true"></i> Simulate
           </button>
@@ -130,6 +133,9 @@
       </div>
 
       <div id="cpm-summary" aria-live="polite">
+        <button type="button" id="rag-badge" class="rag-badge" aria-label="Project status — click to override">
+          <span id="rag-dot" class="rag-dot"></span><span id="rag-label">—</span>
+        </button>
         <span>Project Duration: <span id="sum-duration" class="value">—</span></span>
         <span id="sum-finish" class="hidden">Finishes: <span id="sum-finish-date" class="value">—</span></span>
         <span>Critical Tasks: <span id="sum-critical" class="text-critical font-medium">—</span></span>
@@ -263,6 +269,19 @@
           </div>
           <div id="cc-body"></div>
         </div>
+
+        <div id="raid-panel" class="mb-4 shrink-0 card p-3">
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <h3 class="text-xs font-semibold flex items-center gap-1.5">
+              <i data-lucide="clipboard-list" class="w-3.5 h-3.5" aria-hidden="true"></i> RAID Log
+            </h3>
+            <button type="button" id="btn-add-raid" class="tool-btn">
+              <i data-lucide="plus" class="w-3.5 h-3.5" aria-hidden="true"></i> Add entry
+            </button>
+          </div>
+          <div id="raid-filter"></div>
+          <div id="raid-body"></div>
+        </div>
         <div id="evm-panel" class="mb-4 shrink-0 card p-3">
           <div class="flex items-center justify-between gap-2 mb-2">
             <h3 class="text-xs font-semibold flex items-center gap-1.5">
@@ -345,17 +364,20 @@
           <div>
             <label for="edit-min">Optimistic (O)</label>
             <input id="edit-min" type="number" min="0" step="0.5" required />
+            <input id="edit-min-date" type="date" class="hidden estimate-date" aria-label="Optimistic finish date" />
           </div>
           <div>
             <label for="edit-likely">Most Likely (M)</label>
             <input id="edit-likely" type="number" min="0" step="0.5" />
+            <input id="edit-likely-date" type="date" class="hidden estimate-date" aria-label="Most likely finish date" />
           </div>
           <div>
             <label for="edit-max">Pessimistic (P)</label>
             <input id="edit-max" type="number" min="0" step="0.5" required />
+            <input id="edit-max-date" type="date" class="hidden estimate-date" aria-label="Pessimistic finish date" />
           </div>
         </div>
-        <p id="edit-estimate-dates" class="hint hidden"></p>
+        <p id="edit-estimate-caption" class="hint hidden">Days, or the finish date each produces — set either, they stay in step.</p>
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label for="edit-status">Status</label>
@@ -667,6 +689,90 @@
         <div id="scn-list" class="scenario-list"></div>
         <div id="scn-compare" class="hidden scenario-compare"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- RAID entry -->
+  <div id="modal-raid" class="hidden modal" role="dialog" aria-modal="true" aria-labelledby="modal-raid-heading">
+    <div class="modal-card max-w-2xl">
+      <div class="modal-head">
+        <h3 id="modal-raid-heading">RAID Entry</h3>
+        <button type="button" id="modal-raid-close" class="icon-btn" aria-label="Close"><i data-lucide="x" class="w-4 h-4" aria-hidden="true"></i></button>
+      </div>
+      <form id="form-raid" class="p-4 space-y-3">
+        <input type="hidden" id="raid-id" />
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label for="raid-type">Type</label>
+            <select id="raid-type">
+              <option value="risk">Risk</option>
+              <option value="assumption">Assumption</option>
+              <option value="issue">Issue</option>
+              <option value="dependency">Dependency</option>
+            </select>
+          </div>
+          <div>
+            <label for="raid-status">Status</label>
+            <select id="raid-status">
+              <option value="open">Open</option>
+              <option value="closed">Closed</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label for="raid-title">Title</label>
+          <input id="raid-title" type="text" required data-autofocus placeholder="What is it?" />
+        </div>
+        <div>
+          <label for="raid-description">Description</label>
+          <textarea id="raid-description" rows="2"></textarea>
+        </div>
+        <div class="grid grid-cols-3 gap-3" id="raid-risk-fields">
+          <div>
+            <label for="raid-probability">Probability</label>
+            <select id="raid-probability">
+              <option value="">—</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </div>
+          <div>
+            <label for="raid-impact">Impact</label>
+            <select id="raid-impact">
+              <option value="">—</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </div>
+          <div>
+            <label id="raid-due-label" for="raid-due">Due</label>
+            <input id="raid-due" type="number" min="0" step="0.5" placeholder="No date" />
+            <p id="raid-due-hint" class="hint"></p>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label for="raid-owner">Owner</label>
+            <input id="raid-owner" type="text" list="raid-owner-names" placeholder="Nobody" />
+            <datalist id="raid-owner-names"></datalist>
+          </div>
+          <div>
+            <label for="raid-linked">Linked task</label>
+            <select id="raid-linked"><option value="">None</option></select>
+          </div>
+        </div>
+        <div class="flex justify-between pt-2">
+          <button type="button" id="btn-delete-raid" class="hidden btn-danger">
+            <i data-lucide="trash-2" class="w-3.5 h-3.5" aria-hidden="true"></i> Delete
+          </button>
+          <div class="flex gap-2 ml-auto">
+            <button type="button" id="modal-raid-cancel" class="btn-secondary">Cancel</button>
+            <button type="submit" class="btn-primary">Save</button>
+          </div>
+        </div>
+      </form>
     </div>
   </div>
 

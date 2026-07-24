@@ -11,10 +11,10 @@
  * schema than this build understands is loaded on a best-effort basis with a
  * warning. Schema 1 was the original release, before tags, scenarios, or a
  * version stamp existed; schema 2 adds them; schema 3 adds task cost and the
- * earned-value fields.
+ * earned-value fields; schema 4 adds RAG status and the RAID log.
  */
-export const APP_VERSION = '1.2.0';
-export const SCHEMA_VERSION = 3;
+export const APP_VERSION = '1.3.0';
+export const SCHEMA_VERSION = 4;
 
 export const CRITICAL_COLOR = '#ff4d4d';
 export const NEAR_CRITICAL_COLOR = '#f59e0b';

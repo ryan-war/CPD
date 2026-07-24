@@ -944,6 +944,91 @@ body.compact-toolbar .tab-group { padding-left: 0.125rem; }
 /* An on-track cost/schedule index or a favourable variance. */
 .stat-tile.stat-good { border-color: color-mix(in srgb, var(--success) 45%, transparent); color: var(--success); font-weight: 600; }
 
+/* ─── RAG status ──────────────────────────────────────────── */
+
+.rag-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.rag-badge:hover { opacity: 0.85; }
+#rag-label { font-weight: 600; }
+
+.rag-dot {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 999px;
+  background: var(--text-faint);
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.rag-dot.rag-green { background: var(--success); }
+.rag-dot.rag-amber { background: var(--warning); }
+.rag-dot.rag-red { background: var(--critical); }
+/* A ring marks a RAG that was set by hand rather than derived. */
+.rag-dot.rag-manual { box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px color-mix(in srgb, var(--text) 55%, transparent); }
+button.rag-dot:hover { filter: brightness(1.15); }
+.rag-legend { display: inline-flex; gap: 3px; align-items: center; }
+
+/* ─── RAID log ────────────────────────────────────────────── */
+
+#raid-panel { display: none; }
+#raid-panel.open { display: block; }
+
+#raid-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; margin-bottom: 0.5rem; }
+.raid-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 10px;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  background: var(--surface-3);
+  cursor: pointer;
+}
+.raid-filter-chip:hover { color: var(--text); }
+.raid-filter-on { background: color-mix(in srgb, var(--info) 22%, transparent); border-color: var(--info); color: var(--text); font-weight: 600; }
+.raid-closed-toggle { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 10px; color: var(--text-muted); margin-left: auto; }
+.raid-closed-toggle input { accent-color: var(--accent); }
+
+.raid-table td { vertical-align: middle; }
+.raid-type {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 0.25rem;
+  font-weight: 700;
+  font-size: 10px;
+  color: #fff;
+}
+.raid-type-risk { background: var(--critical); }
+.raid-type-issue { background: var(--warning); }
+.raid-type-assumption { background: var(--info); }
+.raid-type-dependency { background: #8b5cf6; }
+.raid-sev { font-size: 9px; padding: 0.0625rem 0.375rem; border-radius: 0.25rem; border: 1px solid currentColor; }
+.raid-sev-high { color: var(--critical); }
+.raid-sev-medium { color: var(--warning); }
+.raid-sev-low { color: var(--text-muted); }
+.raid-closed { opacity: 0.5; }
+.raid-actions { white-space: nowrap; text-align: right; }
+
+/* The finish-date input paired under each O/M/P estimate (calendar on). */
+.estimate-date { margin-top: 0.25rem; font-size: 0.75rem; padding: 0.3rem 0.5rem; }
+
 /* ─── Resource load ───────────────────────────────────────── */
 
 #quality-panel { display: none; }

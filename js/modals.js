@@ -19,33 +19,64 @@ let app = {};
 // the finish date each one implies as they are typed, without re-scheduling.
 let editingES = null;
 
+// Each estimate's day input paired with its finish-date input.
+const ESTIMATE_PAIRS = [
+  ['edit-min', 'edit-min-date'],
+  ['edit-likely', 'edit-likely-date'],
+  ['edit-max', 'edit-max-date']
+];
+
 export function initModals(callbacks) {
   app = callbacks;
-  // Recompute the implied finish dates live as the estimates change.
-  ['edit-min', 'edit-likely', 'edit-max'].forEach(id =>
-    $(id).addEventListener('input', updateEstimateDates));
+  // Two-way: typing days updates the finish date, and picking a finish date
+  // back-computes the days from the task's scheduled start. Both stay in step.
+  ESTIMATE_PAIRS.forEach(([daysId, dateId]) => {
+    $(daysId).addEventListener('input', () => daysToDateInput(daysId, dateId));
+    $(dateId).addEventListener('change', () => dateToDaysInput(daysId, dateId));
+  });
+}
+
+function estimateCalendar() {
+  return createCalendar(getState().calendar);
 }
 
 /**
- * With the calendar on, show what finish date each of the optimistic, likely,
- * and pessimistic estimates lands on — the estimate is a duration, but a date
- * is what a reader thinks in. Hidden when the calendar is off or the task has no
- * scheduled start yet.
+ * Show the finish-date inputs when the calendar is on and the task has a
+ * scheduled start; fill each from its current day estimate. The estimate is a
+ * duration, but with a calendar a reader thinks in finish dates — so either can
+ * be set, and this keeps the pair consistent.
  */
-function updateEstimateDates() {
-  const el = $('edit-estimate-dates');
-  const calendar = createCalendar(getState().calendar);
-  if (!calendar.enabled || editingES == null) {
-    el.classList.add('hidden');
-    el.textContent = '';
-    return;
-  }
-  const finish = value => {
-    const d = Number(value);
-    return Number.isFinite(d) ? calendar.formatFinish(editingES, d) : '—';
-  };
-  el.textContent = `Finishes — O: ${finish($('edit-min').value)} · M: ${finish($('edit-likely').value)} · P: ${finish($('edit-max').value)}`;
-  el.classList.remove('hidden');
+function syncEstimateDates() {
+  const calendar = estimateCalendar();
+  const on = calendar.enabled && editingES != null;
+  $('edit-estimate-caption').classList.toggle('hidden', !on);
+  ESTIMATE_PAIRS.forEach(([daysId, dateId]) => {
+    $(dateId).classList.toggle('hidden', !on);
+    if (on) $(dateId).value = daysToDate(calendar, $(daysId).value);
+  });
+}
+
+function daysToDate(calendar, daysValue) {
+  const d = Number(daysValue);
+  if (!Number.isFinite(d)) return '';
+  return toISODate(calendar.finishDate(editingES, d));
+}
+
+function daysToDateInput(daysId, dateId) {
+  const calendar = estimateCalendar();
+  if (!calendar.enabled || editingES == null) return;
+  $(dateId).value = daysToDate(calendar, $(daysId).value);
+}
+
+function dateToDaysInput(daysId, dateId) {
+  const calendar = estimateCalendar();
+  if (!calendar.enabled || editingES == null) return;
+  const raw = $(dateId).value;
+  if (!raw) return;
+  const offset = calendar.dateToOffset(raw);
+  if (offset == null) return;
+  // Days = finish offset minus the task's start; never negative.
+  $(daysId).value = Math.max(0, +(offset - editingES).toFixed(2));
 }
 
 // ─── Task ──────────────────────────────────────────────────
@@ -184,7 +215,7 @@ export function openNodeModal(nodeId) {
 
   // The finish dates the estimates imply, refreshed for this task's start.
   editingES = schedule().metrics[node.id]?.ES ?? null;
-  updateEstimateDates();
+  syncEstimateDates();
   $('edit-assignee').value = node.assignee || '';
   $('assignee-names').innerHTML = assigneeNames(getState().diagrams)
     .map(name => `<option value="${escapeHtml(name)}"></option>`).join('');
@@ -699,6 +730,6 @@ function renderTornado(sensitivity) {
 }
 
 export function anyDialogOpen() {
-  return ['modal-node', 'modal-edge', 'modal-milestone', 'modal-subpath', 'modal-settings', 'modal-monte', 'modal-scenarios']
+  return ['modal-node', 'modal-edge', 'modal-milestone', 'modal-subpath', 'modal-settings', 'modal-monte', 'modal-scenarios', 'modal-raid']
     .some(isModalOpen);
 }
