@@ -51,6 +51,10 @@ export function taskPV(node, metric, dataDate) {
 
 /** Recorded actual cost, or null when none has been entered. */
 export function taskAC(node) {
+  // null/undefined/'' mean "no actual recorded" — distinct from a real $0.
+  // Number(null) and Number('') are both 0, so guard before coercing or an
+  // unrecorded actual reads as a genuine zero and invents a cost variance.
+  if (node.actualCost == null || node.actualCost === '') return null;
   const ac = Number(node.actualCost);
   return Number.isFinite(ac) && ac >= 0 ? ac : null;
 }
