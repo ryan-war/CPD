@@ -1029,6 +1029,118 @@ button.rag-dot:hover { filter: brightness(1.15); }
 /* The finish-date input paired under each O/M/P estimate (calendar on). */
 .estimate-date { margin-top: 0.25rem; font-size: 0.75rem; padding: 0.3rem 0.5rem; }
 
+/* ─── Workspace overlay ───────────────────────────────────── */
+
+#workspace-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+}
+#workspace-overlay.hidden { display: none; }
+.workspace-card {
+  width: 94vw;
+  max-width: 1400px;
+  height: 90vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  box-shadow: 0 24px 60px var(--shadow);
+  overflow: hidden;
+}
+.workspace-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.workspace-tabs { display: flex; flex-wrap: wrap; gap: 0.25rem; min-width: 0; }
+.ws-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 12px;
+  padding: 0.35rem 0.7rem;
+  border-radius: 0.4rem;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.ws-tab:hover { background: var(--surface-3); color: var(--text); }
+.ws-tab-active { background: var(--surface-3); color: var(--text); border-color: var(--border-strong); font-weight: 600; }
+.workspace-body { flex: 1; min-height: 0; overflow: auto; padding: 0.75rem; }
+.workspace-body .card { margin: 0; }
+
+/* ─── Task table ──────────────────────────────────────────── */
+
+#table-panel { display: none; }
+#table-panel.open { display: block; }
+
+.table-scroll { overflow: auto; max-height: calc(90vh - 10rem); border: 1px solid var(--border); border-radius: 0.5rem; }
+.data-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 11px; font-variant-numeric: tabular-nums; }
+.data-table th, .data-table td { padding: 0.2rem 0.4rem; border-bottom: 1px solid var(--surface-3); white-space: nowrap; }
+.data-table .tbl-head th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-2);
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.data-table .tbl-head th:hover, .data-table .tbl-head th.sorted { color: var(--text); }
+.data-table .tbl-filters th { background: var(--surface-2); }
+.tbl-filter {
+  width: 100%;
+  min-width: 3.5rem;
+  padding: 0.1rem 0.25rem;
+  font-size: 10px;
+  border: 1px solid var(--border);
+  border-radius: 0.2rem;
+  background: var(--surface-3);
+  color: var(--text);
+}
+.tbl-ro { color: var(--text-muted); }
+.tbl-input {
+  width: 100%;
+  min-width: 3rem;
+  padding: 0.1rem 0.25rem;
+  font-size: 11px;
+  border: 1px solid transparent;
+  border-radius: 0.2rem;
+  background: transparent;
+  color: var(--text);
+}
+.tbl-input:hover { border-color: var(--border); }
+.tbl-input:focus { border-color: var(--accent); background: var(--surface-3); outline: none; }
+.data-table tbody tr:hover { background: color-mix(in srgb, var(--info) 8%, transparent); cursor: pointer; }
+.tbl-cols-wrap { position: relative; }
+#tbl-cols-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-height: 18rem;
+  overflow: auto;
+  z-index: 5;
+}
+#tbl-cols-menu.hidden { display: none; }
+.tbl-col-toggle { display: flex; align-items: center; gap: 0.35rem; font-size: 11px; white-space: nowrap; padding: 0.1rem 0.25rem; }
+.tbl-col-toggle input { accent-color: var(--accent); }
+
 /* ─── Resource load ───────────────────────────────────────── */
 
 #quality-panel { display: none; }

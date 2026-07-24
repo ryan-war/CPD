@@ -68,7 +68,12 @@ export function schedule() {
   // means the page has not begun, so progress does not drive it yet.
   const pageStart = pageStartOffset(state);
   const localDataDate = dataDate == null ? null : dataDate - pageStart;
-  const result = computeCPM(nodes, {
+  // Hard date constraints on a sub-path task are stored in project time, like
+  // every other figure the interface writes. Frame them into the page's own
+  // window before scheduling so a "must finish by 15 May" binds on that date,
+  // not fifteen days into the branch; the shift below puts the result back.
+  const scheduleNodes = framedNodes(nodes, pageStart);
+  const result = computeCPM(scheduleNodes, {
     mode, rollup, graph, deadline, dataDate: localDataDate, progressRollup
   });
   shiftSchedule(result.metrics, pageStart);
@@ -113,6 +118,24 @@ function shiftSchedule(metrics, offset) {
   Object.values(metrics).forEach(m => {
     m.ES += offset; m.EF += offset; m.LS += offset; m.LF += offset;
   });
+}
+
+/**
+ * Nodes with their hard date constraints framed into the page — each
+ * project-time constraint reduced by the page's start so the engine, which
+ * schedules the page from zero, applies it where the user meant. Only the
+ * constrained nodes are cloned; the rest pass through untouched. A no-op for
+ * Main and for any page whose parent starts on day zero.
+ */
+function framedNodes(nodes, offset) {
+  if (!offset) return nodes;
+  return nodes.map(n => (n.startNoEarlierThan == null && n.mustFinishBy == null)
+    ? n
+    : {
+        ...n,
+        startNoEarlierThan: n.startNoEarlierThan == null ? null : n.startNoEarlierThan - offset,
+        mustFinishBy: n.mustFinishBy == null ? null : n.mustFinishBy - offset
+      });
 }
 
 /**

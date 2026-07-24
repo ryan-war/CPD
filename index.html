@@ -56,8 +56,11 @@
           <button type="button" id="btn-pert" data-secondary title="Toggle PERT estimation (O + 4M + P) / 6" aria-pressed="false" class="tool-btn">
             <i data-lucide="calculator" class="w-3.5 h-3.5" aria-hidden="true"></i> PERT
           </button>
-          <button type="button" id="btn-gantt" data-secondary title="Toggle mini-Gantt" aria-pressed="false" class="tool-btn">
+          <button type="button" id="btn-gantt" data-secondary title="Mini-Gantt timeline" aria-pressed="false" class="tool-btn">
             <i data-lucide="bar-chart-3" class="w-3.5 h-3.5" aria-hidden="true"></i> Gantt
+          </button>
+          <button type="button" id="btn-table" data-secondary title="Task table — a sortable, filterable, editable grid of the page's tasks" aria-pressed="false" class="tool-btn">
+            <i data-lucide="table" class="w-3.5 h-3.5" aria-hidden="true"></i> Table
           </button>
           <button type="button" id="btn-resources" data-secondary title="Toggle resource load — who is doing what, and when they are double-booked" aria-pressed="false" class="tool-btn">
             <i data-lucide="users" class="w-3.5 h-3.5" aria-hidden="true"></i> Resources
@@ -226,7 +229,29 @@
 
         <div id="tag-filter-bar" class="hidden" role="group" aria-label="Filter tasks by tag"></div>
 
-        <div id="gantt-panel" class="mb-4 shrink-0 card p-3">
+        <div id="milestones-container" class="space-y-4 flex-1 min-h-0"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Workspace overlay: the roomy home for the analysis views, so they are not
+       crammed under the task cards. One tab shown at a time. -->
+  <div id="workspace-overlay" class="hidden" role="dialog" aria-modal="true" aria-label="Analysis views">
+    <div class="workspace-card">
+      <div class="workspace-head">
+        <nav class="workspace-tabs" role="tablist" aria-label="Analysis views">
+          <button type="button" class="ws-tab" data-ws-tab="gantt" role="tab"><i data-lucide="gantt-chart" class="w-3.5 h-3.5" aria-hidden="true"></i> Gantt</button>
+          <button type="button" class="ws-tab" data-ws-tab="table" role="tab"><i data-lucide="table" class="w-3.5 h-3.5" aria-hidden="true"></i> Table</button>
+          <button type="button" class="ws-tab" data-ws-tab="resources" role="tab"><i data-lucide="users" class="w-3.5 h-3.5" aria-hidden="true"></i> Resources</button>
+          <button type="button" class="ws-tab" data-ws-tab="evm" role="tab"><i data-lucide="banknote" class="w-3.5 h-3.5" aria-hidden="true"></i> Cost</button>
+          <button type="button" class="ws-tab" data-ws-tab="quality" role="tab"><i data-lucide="stethoscope" class="w-3.5 h-3.5" aria-hidden="true"></i> Health</button>
+          <button type="button" class="ws-tab" data-ws-tab="cc" role="tab"><i data-lucide="gauge" class="w-3.5 h-3.5" aria-hidden="true"></i> Chain</button>
+          <button type="button" class="ws-tab" data-ws-tab="raid" role="tab"><i data-lucide="clipboard-list" class="w-3.5 h-3.5" aria-hidden="true"></i> RAID</button>
+        </nav>
+        <button type="button" id="workspace-close" class="icon-btn" aria-label="Close analysis views"><i data-lucide="x" class="w-4 h-4" aria-hidden="true"></i></button>
+      </div>
+      <div class="workspace-body">
+        <div id="gantt-panel" class="card p-3">
           <div class="flex items-center justify-between mb-2">
             <h3 class="text-xs font-semibold flex items-center gap-1.5">
               <i data-lucide="gantt-chart" class="w-3.5 h-3.5" aria-hidden="true"></i> Mini-Gantt Timeline
@@ -237,7 +262,18 @@
           <div id="gantt-body"></div>
         </div>
 
-        <div id="resource-panel" class="mb-4 shrink-0 card p-3">
+        <div id="table-panel" class="card p-3">
+          <div class="flex items-center justify-between gap-2 mb-2 flex-wrap">
+            <h3 class="text-xs font-semibold flex items-center gap-1.5">
+              <i data-lucide="table" class="w-3.5 h-3.5" aria-hidden="true"></i> Task Table
+              <span id="table-count" class="text-[10px] text-muted font-normal"></span>
+            </h3>
+            <div id="table-controls" class="flex items-center gap-2 flex-wrap"></div>
+          </div>
+          <div id="table-body"></div>
+        </div>
+
+        <div id="resource-panel" class="card p-3">
           <div class="flex items-center justify-between gap-2 mb-2">
             <h3 class="text-xs font-semibold flex items-center gap-1.5">
               <i data-lucide="users" class="w-3.5 h-3.5" aria-hidden="true"></i> Resource Load
@@ -251,7 +287,16 @@
           <div id="resource-body"></div>
         </div>
 
-        <div id="quality-panel" class="mb-4 shrink-0 card p-3">
+        <div id="evm-panel" class="card p-3">
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <h3 class="text-xs font-semibold flex items-center gap-1.5">
+              <i data-lucide="banknote" class="w-3.5 h-3.5" aria-hidden="true"></i> Cost &amp; Earned Value
+            </h3>
+          </div>
+          <div id="evm-body"></div>
+        </div>
+
+        <div id="quality-panel" class="card p-3">
           <div class="flex items-center justify-between gap-2 mb-2">
             <h3 class="text-xs font-semibold flex items-center gap-1.5">
               <i data-lucide="stethoscope" class="w-3.5 h-3.5" aria-hidden="true"></i> Schedule Health
@@ -261,7 +306,7 @@
           <div id="quality-body"></div>
         </div>
 
-        <div id="cc-panel" class="mb-4 shrink-0 card p-3">
+        <div id="cc-panel" class="card p-3">
           <div class="flex items-center justify-between gap-2 mb-2">
             <h3 class="text-xs font-semibold flex items-center gap-1.5">
               <i data-lucide="gauge" class="w-3.5 h-3.5" aria-hidden="true"></i> Critical Chain
@@ -270,7 +315,7 @@
           <div id="cc-body"></div>
         </div>
 
-        <div id="raid-panel" class="mb-4 shrink-0 card p-3">
+        <div id="raid-panel" class="card p-3">
           <div class="flex items-center justify-between gap-2 mb-2">
             <h3 class="text-xs font-semibold flex items-center gap-1.5">
               <i data-lucide="clipboard-list" class="w-3.5 h-3.5" aria-hidden="true"></i> RAID Log
@@ -282,16 +327,6 @@
           <div id="raid-filter"></div>
           <div id="raid-body"></div>
         </div>
-        <div id="evm-panel" class="mb-4 shrink-0 card p-3">
-          <div class="flex items-center justify-between gap-2 mb-2">
-            <h3 class="text-xs font-semibold flex items-center gap-1.5">
-              <i data-lucide="banknote" class="w-3.5 h-3.5" aria-hidden="true"></i> Cost &amp; Earned Value
-            </h3>
-          </div>
-          <div id="evm-body"></div>
-        </div>
-
-        <div id="milestones-container" class="space-y-4 flex-1 min-h-0"></div>
       </div>
     </div>
   </div>

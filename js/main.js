@@ -25,13 +25,16 @@ import {
 } from './network.js';
 import {
   renderBottomPanel, renderGantt, renderSummary, renderLegend, clearMonteCarloSummary,
-  isGanttOpen, setGanttOpen, highlightTasks,
-  renderResources, isResourcesOpen, setResourcesOpen, setResourceCapacity, getResourceCapacity,
-  renderQuality, isQualityOpen, setQualityOpen, renderTagFilter,
-  renderEVM, isEvmOpen, setEvmOpen,
-  renderCriticalChain, isCCOpen, setCCOpen,
-  renderRAID, isRaidOpen, setRaidOpen, setRaidFilter, setRaidShowClosed
+  highlightTasks, renderResources, setResourceCapacity, getResourceCapacity,
+  renderQuality, renderTagFilter, renderEVM, renderCriticalChain,
+  renderRAID, setRaidFilter, setRaidShowClosed
 } from './panel.js';
+import {
+  openWorkspace, closeWorkspace, toggleWorkspace, setWorkspaceTool, isWorkspaceOpen
+} from './workspace.js';
+import {
+  initTable, renderTable, handleTableClick, handleTableChange
+} from './table.js';
 import { levelResources } from './resources.js';
 import { nextOverride } from './rag.js';
 import {
@@ -89,6 +92,7 @@ function render({ fit = false } = {}) {
   renderEVM();
   renderCriticalChain();
   renderRAID();
+  renderTable();
   renderLegend();
   updateHistoryButtons();
   updateCanvasEmptyState();
@@ -806,12 +810,12 @@ function applyLevelling(mode) {
   }
 
   // Only the tasks the resource pushed get a constraint. Their successors move
-  // because the logic says they must, which is already written down. On a
-  // sub-path the metrics are in project time, so subtract the page's start to
-  // write the constraint in the page's own frame — where the engine reads it.
+  // because the logic says they must, which is already written down. Constraints
+  // are stored in project time (the metrics already are), and schedule() frames
+  // them back into the page, so an absolute value is what to write.
   constrained.forEach(id => {
     const found = findNode(id);
-    if (found) found.node.startNoEarlierThan = +(metrics[id].ES - pageStart + delays.get(id)).toFixed(4);
+    if (found) found.node.startNoEarlierThan = +(metrics[id].ES + delays.get(id)).toFixed(4);
   });
 
   const moved = `${delays.size} task${delays.size === 1 ? '' : 's'}`;
@@ -833,13 +837,26 @@ function wireToolbar() {
   $('btn-fit').addEventListener('click', () => fitView(300));
   $('btn-undo').addEventListener('click', doUndo);
   $('btn-redo').addEventListener('click', doRedo);
-  $('btn-gantt').addEventListener('click', () => setGanttOpen(!isGanttOpen()));
-  $('btn-resources').addEventListener('click', () => setResourcesOpen(!isResourcesOpen()));
-  $('btn-quality').addEventListener('click', () => setQualityOpen(!isQualityOpen()));
-  $('btn-evm').addEventListener('click', () => setEvmOpen(!isEvmOpen()));
+  // Each analysis tool opens the roomy workspace overlay at its tab.
+  $('btn-gantt').addEventListener('click', () => toggleWorkspace('gantt'));
+  $('btn-table').addEventListener('click', () => toggleWorkspace('table'));
+  $('btn-resources').addEventListener('click', () => toggleWorkspace('resources'));
+  $('btn-quality').addEventListener('click', () => toggleWorkspace('quality'));
+  $('btn-evm').addEventListener('click', () => toggleWorkspace('evm'));
   $('rag-badge').addEventListener('click', cycleProjectRag);
-  $('btn-cc').addEventListener('click', () => setCCOpen(!isCCOpen()));
-  $('btn-raid').addEventListener('click', () => setRaidOpen(!isRaidOpen()));
+  $('btn-cc').addEventListener('click', () => toggleWorkspace('cc'));
+  $('btn-raid').addEventListener('click', () => toggleWorkspace('raid'));
+  $('workspace-close').addEventListener('click', closeWorkspace);
+  document.querySelector('.workspace-tabs').addEventListener('click', event => {
+    const tab = event.target.closest('[data-ws-tab]');
+    if (tab) setWorkspaceTool(tab.dataset.wsTab);
+  });
+  $('workspace-overlay').addEventListener('click', event => {
+    if (event.target.id === 'workspace-overlay') closeWorkspace();
+  });
+  // Table interactions (sort, filter, column toggles, inline edit, CSV, select).
+  $('table-panel').addEventListener('click', handleTableClick);
+  $('table-panel').addEventListener('change', handleTableChange);
   $('btn-add-raid').addEventListener('click', () => openRaidModal());
   // RAID panel: filters, the show-closed toggle, and per-row edit/delete/jump.
   $('raid-panel').addEventListener('click', event => {
@@ -858,9 +875,7 @@ function wireToolbar() {
   $('modal-raid-close').addEventListener('click', closeRaidModal);
   $('modal-raid-cancel').addEventListener('click', closeRaidModal);
   $('btn-delete-raid').addEventListener('click', deleteRaidFromModal);
-  $('modal-raid').addEventListener('click', event => {
-    if (event.target.id === 'modal-raid') closeRaidModal();
-  });
+  // No backdrop-close: it is an editing form, and a stray click must not discard it.
   // A list of ids you cannot act on is just a reproach; clicking a finding
   // selects the tasks it names so you can go and look at them.
   $('quality-body').addEventListener('click', event => {
@@ -954,8 +969,8 @@ function wireToolbar() {
 
   bindFileInput(() => {
     resetViewState();
+    closeWorkspace();
     applyTheme();
-    setGanttOpen(isGanttOpen());
     // What is on screen is now the loaded file, not the restored session.
     $('restore-banner').classList.add('hidden');
     $('shared-banner').classList.add('hidden');
@@ -1050,17 +1065,12 @@ function wireModals() {
   $('modal-monte-close').addEventListener('click', closeMonteModal);
   $('btn-run-monte').addEventListener('click', runSimulation);
 
-  [
-    ['modal-node', closeNodeModal],
-    ['modal-edge', closeEdgeModal],
-    ['modal-milestone', closeMilestoneModal],
-    ['modal-subpath', closeSubpathModal],
-    ['modal-settings', closeSettingsModal],
-    ['modal-monte', closeMonteModal]
-  ].forEach(([id, close]) => {
-    $(id).addEventListener('click', event => {
-      if (event.target.id === id) close();
-    });
+  // Only the read-only Monte Carlo dialog dismisses on a backdrop click. The
+  // editing dialogs (task, dependency, milestone, sub-path, settings, RAID) do
+  // not: a stray click outside the box must never throw away what was typed
+  // before Save. Those close by the ✕, Cancel, or Esc — all deliberate.
+  $('modal-monte').addEventListener('click', event => {
+    if (event.target.id === 'modal-monte') closeMonteModal();
   });
 }
 
@@ -1182,6 +1192,10 @@ function wireKeyboard() {
     if (event.key === 'Escape') {
       if (anyDialogOpen()) {
         closeAllModals();
+        return;
+      }
+      if (isWorkspaceOpen()) {
+        closeWorkspace();
         return;
       }
       if (isPagePickerOpen()) {
@@ -1451,6 +1465,23 @@ async function boot() {
   // A RAID edit is an ordinary project change: history entry, full re-render (so
   // the project/milestone RAG picks up a new open risk immediately).
   initRaid({ onChange: message => onChange(message) });
+
+  // A table edit is an ordinary change (history + re-render); a row-click selects
+  // the task on the canvas; CSV downloads the visible, filtered grid.
+  initTable({
+    onChange: () => onChange(null),
+    onSelect: id => { selectNodes([id], { focus: true }); highlightTasks([id]); },
+    onExportCSV: csv => {
+      const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'tasks.csv';
+      a.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast('Table exported to CSV', 'success');
+    }
+  });
 
   wireToolbar();
   wireDisplayMenu();
