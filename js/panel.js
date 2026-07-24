@@ -451,7 +451,12 @@ export function renderBottomPanel() {
           </div>
           <div class="ms-stats">${milestoneStatsHtml(ms, ctx)}</div>
         </div>`;
-      const cards = orderedNodes(ms, metrics).map((n, row) =>
+      // Follow the canvas rows: the columns layout chose them to reduce arrow
+      // crossings, so ordering the cards by their placed Y keeps card and canvas
+      // the same table even when that is not plain schedule order.
+      const rows = (ms.nodes || []).slice().sort((a, b) =>
+        ((a.position?.y ?? 0) - (b.position?.y ?? 0)) || String(a.id).localeCompare(String(b.id)));
+      const cards = rows.map((n, row) =>
         `<div class="swim-cell" style="grid-column:${i + 1};grid-row:${row + 2}">${taskCardHtml(n, ctx)}</div>`
       ).join('') || `<div class="swim-cell" style="grid-column:${i + 1};grid-row:2"><p class="text-xs text-muted">No tasks</p></div>`;
       return head + cards;

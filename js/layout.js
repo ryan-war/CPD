@@ -209,15 +209,51 @@ export function computeCpmLayout(nodes, schedule = {}, options = {}) {
   const { sizeOf } = options;
 
   const ranks = rankNodes(nodes, graph);
+  const { succs: realSuccs } = neighbourMaps(nodes, graph);
+
+  // Two candidate orderings. The plain one is a straight layered layout. The
+  // laned one routes each long edge down a reserved lane so it does not cut
+  // through the tasks between its ends — but reserving those lanes can, on some
+  // graphs, order the ranks worse and cross more arrows against each other. So
+  // score both by the arrows that actually cross, and keep the tidier one; the
+  // laned layout is used only when it does not make the crossings worse.
+  const plain = orderPlain(nodes, ranks, metrics, graph, criticalIds);
+  const laned = orderLaned(nodes, ranks, metrics, graph, criticalIds);
+
+  const realOnly = layers => layers.map(layer => layer.filter(id => !laned.virtual.has(id)));
+  const plainScore = totalCrossings(plain.layers, realSuccs);
+  const lanedScore = totalCrossings(realOnly(laned.layers), realSuccs);
+  const chosen = lanedScore < plainScore ? laned : plain;
+
+  positionLayers(chosen.layers, chosen.virtual, { sizeOf, criticalIds, positions });
+  return { positions, layers: chosen.layers.map(l => l.filter(id => !chosen.virtual.has(id))), ranks };
+}
+
+/** The plain layered ordering: barycenter sweeps over the real graph. */
+function orderPlain(nodes, ranks, metrics, graph, criticalIds) {
+  const layers = bucketByRank(nodes, ranks, metrics);
+  const { preds, succs } = neighbourMaps(nodes, graph);
+  let best = layers.map(layer => layer.slice());
+  let bestScore = totalCrossings(layers, succs);
+  for (let pass = 0; pass < 4; pass++) {
+    barycenterSweep(pass % 2 === 0 ? layers : [...layers].reverse(), pass % 2 === 0 ? preds : succs);
+    transposePass(layers, succs);
+    const score = totalCrossings(layers, succs);
+    if (score < bestScore) { bestScore = score; best = layers.map(layer => layer.slice()); }
+  }
+  return { layers: best.map(layer => centreOnCritical(layer, criticalIds)), virtual: new Set() };
+}
+
+/**
+ * The lane-routed ordering: the graph is expanded with a virtual placeholder on
+ * every rank a long edge crosses, so those edges reserve a clear lane and are
+ * not drawn across the tasks between their ends. The placeholders are dropped
+ * from the returned layers but marked in `virtual` so positioning can reserve
+ * their slots.
+ */
+function orderLaned(nodes, ranks, metrics, graph, criticalIds) {
   const known = new Set(nodes.map(n => n.id));
   const maxRank = Math.max(0, ...ranks.values());
-
-  // Expand the graph with virtual routing nodes: an edge spanning more than one
-  // rank is broken into a chain through a placeholder on every rank between its
-  // ends. Those placeholders take part in the ordering and reserve a slot when
-  // the ranks are laid out, so the straight edge travels down an empty lane
-  // rather than being drawn across the tasks that sit between its endpoints —
-  // which is what made long arrows cut through nodes.
   const layers = Array.from({ length: maxRank + 1 }, () => []);
   const succs = new Map();
   const preds = new Map();
@@ -233,9 +269,8 @@ export function computeCpmLayout(nodes, schedule = {}, options = {}) {
 
   let vcount = 0;
   nodes.forEach(n => {
-    const deps = graph?.deps?.get(n.id) || dependenciesOf(n);
     const rv = ranks.get(n.id) ?? 0;
-    deps.forEach(d => {
+    (graph?.deps?.get(n.id) || dependenciesOf(n)).forEach(d => {
       if (!known.has(d.id)) return;
       const ru = ranks.get(d.id) ?? 0;
       if (rv - ru <= 1) {
@@ -260,29 +295,23 @@ export function computeCpmLayout(nodes, schedule = {}, options = {}) {
     });
   });
 
-  // Seed each rank by earliest start, a virtual taking its edge's start.
   layers.forEach(list =>
     list.sort((a, b) => (esKey.get(a) - esKey.get(b)) || String(a).localeCompare(String(b))));
 
-  // Alternating sweeps over the expanded graph: downward orders each rank by its
-  // predecessors, upward by its successors. Six passes settles diagrams this size.
   let best = layers.map(layer => layer.slice());
   let bestScore = totalCrossings(layers, succs);
   for (let pass = 0; pass < 6; pass++) {
-    barycenterSweep(pass % 2 === 0 ? layers : [...layers].reverse(),
-      pass % 2 === 0 ? preds : succs);
+    barycenterSweep(pass % 2 === 0 ? layers : [...layers].reverse(), pass % 2 === 0 ? preds : succs);
     transposePass(layers, succs);
     const score = totalCrossings(layers, succs);
-    if (score < bestScore) {
-      bestScore = score;
-      best = layers.map(layer => layer.slice());
-    }
+    if (score < bestScore) { bestScore = score; best = layers.map(layer => layer.slice()); }
   }
+  return { layers: best.map(layer => centreOnCritical(layer, criticalIds)), virtual };
+}
 
-  const ordered = best.map(layer => centreOnCritical(layer, criticalIds));
+/** Place an ordered set of layers, virtual placeholders reserving lane space. */
+function positionLayers(ordered, virtual, { sizeOf, criticalIds, positions }) {
   const heightOf = id => virtual.has(id) ? VIRTUAL_HEIGHT : sizeFor(sizeOf, id).height;
-
-  // Column x from the widest real task in each rank; virtual nodes have no width.
   let x = 0;
   ordered.forEach((layer, i) => {
     const reals = layer.filter(id => !virtual.has(id));
@@ -292,9 +321,6 @@ export function computeCpmLayout(nodes, schedule = {}, options = {}) {
     if (i > 0) x += width / 2;
     const columnX = x;
 
-    // Rows stack by height — real tasks by their own, virtuals by their lane —
-    // centred on the critical task's line at y = 0, or on the rank itself when
-    // nothing on it is critical.
     const offsets = [];
     let cursor = 0;
     layer.forEach(id => {
@@ -306,14 +332,12 @@ export function computeCpmLayout(nodes, schedule = {}, options = {}) {
     const centre = spineIndex >= 0 ? offsets[spineIndex] : cursor / 2;
 
     layer.forEach((id, j) => {
-      if (virtual.has(id)) return; // placeholders are not tasks; they only reserve space
+      if (virtual.has(id)) return; // placeholders only reserve space
       positions[id] = { x: columnX, y: Math.round(offsets[j] - centre) };
     });
 
     x += width / 2 + COLUMN_MIN_GAP;
   });
-
-  return { positions, layers: ordered.map(l => l.filter(id => !virtual.has(id))), ranks };
 }
 
 // ─── Columns view ──────────────────────────────────────────
@@ -382,6 +406,125 @@ export function orderedNodes(milestone, metrics) {
     (of(a.id, 'slack') - of(b.id, 'slack')) ||
     String(a.id).localeCompare(String(b.id))
   );
+}
+
+/**
+ * Row order for every milestone column, chosen to cut edge crossings.
+ *
+ * Columns group tasks by milestone, not by dependency, so an arrow from one
+ * milestone to another crosses whatever sits between them — schedule-order rows
+ * do nothing to help. This drifts each task toward the average row of the tasks
+ * it links to, wherever their column, so connected work lines up and the arrows
+ * between columns straighten out. Earliest start seeds the order and breaks
+ * ties, so the result still reads roughly in schedule order.
+ *
+ * @returns {Map<string, string[]>} milestone id → task ids, top row first
+ */
+export function columnOrder(milestones, metrics, graph) {
+  const scheduleOrder = new Map();
+  (milestones || []).forEach(ms => scheduleOrder.set(ms.id, orderedNodes(ms, metrics).map(n => n.id)));
+
+  const all = (milestones || []).flatMap(ms => ms.nodes || []);
+  if (all.length < 3) return scheduleOrder;
+
+  const known = new Set(all.map(n => n.id));
+  const neighbours = new Map(all.map(n => [n.id, []]));
+  all.forEach(n => {
+    (graph?.deps?.get(n.id) || dependenciesOf(n)).forEach(d => {
+      if (!known.has(d.id)) return;
+      neighbours.get(n.id).push(d.id);
+      neighbours.get(d.id).push(n.id);
+    });
+  });
+
+  // A barycenter copy: each task drifts toward the average row of the tasks it
+  // links to. Seeded from the schedule order, so ties still read in ES order.
+  const barycentric = new Map([...scheduleOrder].map(([id, list]) => [id, list.slice()]));
+  const es = new Map(all.map(n => [n.id, Number(metrics?.[n.id]?.ES) || 0]));
+  const row = new Map();
+  const reindex = () => barycentric.forEach(list => list.forEach((id, i) => row.set(id, i)));
+  reindex();
+  for (let pass = 0; pass < 8; pass++) {
+    barycentric.forEach(list => {
+      if (list.length < 2) return;
+      const key = new Map(list.map(id => {
+        const nb = neighbours.get(id);
+        const bary = nb.length ? nb.reduce((a, x) => a + row.get(x), 0) / nb.length : row.get(id);
+        return [id, bary];
+      }));
+      list.sort((a, b) =>
+        (key.get(a) - key.get(b)) || (es.get(a) - es.get(b)) || String(a).localeCompare(String(b)));
+    });
+    reindex();
+  }
+
+  // Barycentre alone can oscillate — flipping two columns together and leaving
+  // the crossing between them in place. A transpose pass swaps adjacent tasks
+  // within a column and keeps a swap only when it crosses fewer arrows, which
+  // breaks those stalemates. Skipped on very large pages, where the pairwise
+  // count would be too slow; barycentre still applies there.
+  if (all.length <= 120) {
+    let best = columnCrossings(barycentric, milestones, graph);
+    let improved = true;
+    let guard = 0;
+    while (improved && guard++ < 4) {
+      improved = false;
+      (milestones || []).forEach(ms => {
+        const list = barycentric.get(ms.id);
+        for (let j = 0; j < list.length - 1; j++) {
+          [list[j], list[j + 1]] = [list[j + 1], list[j]];
+          const c = columnCrossings(barycentric, milestones, graph);
+          if (c < best) { best = c; improved = true; }
+          else [list[j], list[j + 1]] = [list[j + 1], list[j]];
+        }
+      });
+    }
+  }
+
+  // Keep the reordering only when it actually crosses fewer arrows than the plain
+  // schedule order — a guarantee it never makes the columns worse.
+  return columnCrossings(barycentric, milestones, graph) < columnCrossings(scheduleOrder, milestones, graph)
+    ? barycentric
+    : scheduleOrder;
+}
+
+/** Do segments AB and CD properly cross? (Shared endpoints handled by the caller.) */
+function segmentsCross(a, b, c, d) {
+  const side = (p, q, r) => Math.sign((r.y - p.y) * (q.x - p.x) - (q.y - p.y) * (r.x - p.x));
+  return side(a, c, d) !== side(b, c, d) && side(a, b, c) !== side(a, b, d);
+}
+
+/** Arrows that cross, for a given column row-ordering — the value to minimise. */
+function columnCrossings(order, milestones, graph) {
+  const col = new Map();
+  const rowIndex = new Map();
+  (milestones || []).forEach((ms, ci) =>
+    (order.get(ms.id) || []).forEach((id, ri) => { col.set(id, ci); rowIndex.set(id, ri); }));
+
+  const all = (milestones || []).flatMap(ms => ms.nodes || []);
+  const known = new Set(all.map(n => n.id));
+  const edges = [];
+  all.forEach(n => {
+    (graph?.deps?.get(n.id) || dependenciesOf(n)).forEach(d => {
+      if (!known.has(d.id) || d.id === n.id || !col.has(d.id) || !col.has(n.id)) return;
+      edges.push([
+        { x: col.get(d.id), y: rowIndex.get(d.id) },
+        { x: col.get(n.id), y: rowIndex.get(n.id) }
+      ]);
+    });
+  });
+
+  const same = (p, q) => p.x === q.x && p.y === q.y;
+  let count = 0;
+  for (let i = 0; i < edges.length; i++) {
+    for (let j = i + 1; j < edges.length; j++) {
+      const [a, b] = edges[i];
+      const [c, d] = edges[j];
+      if (same(a, c) || same(a, d) || same(b, c) || same(b, d)) continue;
+      if (segmentsCross(a, b, c, d)) count++;
+    }
+  }
+  return count;
 }
 
 /**

@@ -13,7 +13,7 @@ import {
 import { dependenciesOf, wouldCreateCycle, toDependency } from './cpm.js';
 import { followNodeLink, groupPagesByMainNode } from './links.js';
 import {
-  computeCpmLayout, orderedNodes, columnRowHeight, columnRowOrigin, freeSpotNear,
+  computeCpmLayout, orderedNodes, columnOrder, columnRowHeight, columnRowOrigin, freeSpotNear,
   ghostLayout
 } from './layout.js';
 import {
@@ -623,17 +623,19 @@ function applyMilestoneLayout({ silent = false } = {}) {
   }
 
   getState().layoutMode = 'milestone';
-  const { metrics } = schedule();
+  const { metrics, graph } = schedule();
   const { columns } = columnLayout(diagram);
   const rowHeight = columnRowHeight(diagram.milestones, nodeSizeOf);
   const originY = columnRowOrigin(diagram.milestones, rowHeight);
 
+  // Row order chosen to cut the arrows crossing between columns, not just by
+  // schedule; the cards follow these same rows (see renderBottomPanel).
+  const order = columnOrder(diagram.milestones, metrics, graph);
   diagram.milestones.forEach((ms, col) => {
-    orderedNodes(ms, metrics).forEach((n, row) => {
-      n.position = {
-        x: columns[col] ? columns[col].centre : 0,
-        y: originY + row * rowHeight
-      };
+    const byId = new Map((ms.nodes || []).map(n => [n.id, n]));
+    (order.get(ms.id) || []).forEach((id, row) => {
+      const n = byId.get(id);
+      if (n) n.position = { x: columns[col] ? columns[col].centre : 0, y: originY + row * rowHeight };
     });
   });
 
