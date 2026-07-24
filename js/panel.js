@@ -565,7 +565,7 @@ export function renderGantt() {
   panel.classList.add('open');
 
   const {
-    metrics, projectDuration, criticalIds, nearCritical, nodes, calendar, dataDate
+    metrics, projectDuration, criticalIds, nearCritical, nodes, calendar, dataDate, pageStart
   } = schedule();
   if (!nodes.length || projectDuration <= 0) {
     body.innerHTML = '<p class="text-xs text-muted">No schedule to display.</p>';
@@ -574,11 +574,15 @@ export function renderGantt() {
     return;
   }
 
+  // The chart's window: a sub-path starts where its parent Main task does, not
+  // at the project origin, so the axis runs from pageStart to pageStart+duration.
+  const start = pageStart || 0;
+  const end = start + projectDuration;
   $('gantt-scale').textContent = calendar.enabled
-    ? `${calendar.formatOffset(0)} → ${calendar.formatFinish(0, projectDuration)}`
-    : `0 → ${projectDuration.toFixed(1)}d`;
+    ? `${calendar.formatOffset(start)} → ${calendar.formatFinish(start, projectDuration)}`
+    : `${fmt(start)} → ${fmt(end)}d`;
 
-  renderGanttAxis(projectDuration, calendar);
+  renderGanttAxis(projectDuration, calendar, start);
 
   const sorted = [...nodes].sort(
     (a, b) => (metrics[a.id].ES - metrics[b.id].ES) || String(a.id).localeCompare(String(b.id))
@@ -587,7 +591,7 @@ export function renderGantt() {
   // Where "now" falls across the chart, so a bar can be read as behind or ahead
   // of it rather than merely long.
   const nowPercent = dataDate != null
-    ? Math.max(0, Math.min(100, (dataDate / projectDuration) * 100))
+    ? Math.max(0, Math.min(100, ((dataDate - start) / projectDuration) * 100))
     : null;
   const nowMarker = nowPercent == null
     ? ''
@@ -595,7 +599,7 @@ export function renderGantt() {
 
   body.innerHTML = sorted.map(n => {
     const m = metrics[n.id];
-    const left = (m.ES / projectDuration) * 100;
+    const left = ((m.ES - start) / projectDuration) * 100;
     // The span the task actually occupies. With a data date these part company
     // with the planned duration: finished work stops at the reporting date and
     // work in progress runs from it.
@@ -630,7 +634,7 @@ export function renderGantt() {
  * with only a total in the corner, so there was no way to read a position off
  * the chart.
  */
-function renderGanttAxis(projectDuration, calendar) {
+function renderGanttAxis(projectDuration, calendar, start = 0) {
   const axis = $('gantt-axis');
   if (!axis) return;
   const target = 6;
@@ -640,10 +644,11 @@ function renderGanttAxis(projectDuration, calendar) {
 
   const ticks = [];
   for (let value = 0; value <= projectDuration + 1e-9; value += step) {
+    const at = start + value;
     ticks.push({
-      value,
+      value: at,
       percent: (value / projectDuration) * 100,
-      label: calendar.enabled ? calendar.formatOffset(value) : `${fmt(+value.toFixed(4))}d`
+      label: calendar.enabled ? calendar.formatOffset(at) : `${fmt(+at.toFixed(4))}d`
     });
   }
   axis.innerHTML = ticks.map(t =>
@@ -668,7 +673,7 @@ export function renderResources() {
   }
   panel.classList.add('open');
 
-  const { metrics, projectDuration, nodes, calendar } = schedule();
+  const { metrics, projectDuration, nodes, calendar, pageStart } = schedule();
   if (!nodes.length || projectDuration <= 0) {
     body.innerHTML = '<p class="text-xs text-muted">No schedule to analyse.</p>';
     return;
@@ -685,7 +690,10 @@ export function renderResources() {
     return;
   }
 
-  const scale = value => (value / projectDuration) * 100;
+  // Positions are window-relative — a sub-path's lane starts at the page's own
+  // start, not the project origin — while the labels read in absolute dates.
+  const start = pageStart || 0;
+  const scale = value => ((value - start) / projectDuration) * 100;
   const when = (from, to) => calendar.enabled
     ? `${calendar.formatOffset(from)} → ${calendar.formatFinish(from, to - from)}`
     : `${fmt(from)}–${fmt(to)}d`;
@@ -712,7 +720,7 @@ export function renderResources() {
             : `${fmt(person.busyDays)}d busy`}
         </div>
       </div>`;
-  }).join('') + levellingSection(nodes, metrics, projectDuration, calendar, load);
+  }).join('') + levellingSection(nodes, metrics, projectDuration, calendar, load, start);
 }
 
 /**
@@ -723,7 +731,7 @@ export function renderResources() {
  * the choice between them is the whole question: spend the float, or spend the
  * end date.
  */
-function levellingSection(nodes, metrics, projectDuration, calendar, load) {
+function levellingSection(nodes, metrics, projectDuration, calendar, load, start = 0) {
   const overloaded = load.filter(p => p.name !== UNASSIGNED && p.overloadedDays > 0);
   if (!overloaded.length) return '';
 
@@ -742,7 +750,9 @@ function levellingSection(nodes, metrics, projectDuration, calendar, load) {
       .join(', ');
   };
 
-  const slip = +(full.projectDuration - projectDuration).toFixed(4);
+  // levelResources works from the (absolute) metrics, so its projectDuration is
+  // an absolute end; the original end is start + the page's own span.
+  const slip = +(full.projectDuration - (start + projectDuration)).toFixed(4);
 
   return `
     <div class="level-panel">
@@ -1224,7 +1234,7 @@ export function renderRAID() {
 export function renderSummary() {
   const {
     projectDuration, criticalIds, nearCritical, nodes, graph, calendar, deadline, overrun,
-    dataDate, outOfSequenceIds, metrics
+    dataDate, outOfSequenceIds, metrics, pageStart
   } = schedule();
   const state = getState();
   const usable = nodes.length && !graph.cycleIds.length;
@@ -1285,7 +1295,7 @@ export function renderSummary() {
   const finish = $('sum-finish');
   finish.classList.toggle('hidden', !usable || !calendar.enabled);
   if (usable && calendar.enabled) {
-    $('sum-finish-date').textContent = calendar.formatFinish(0, projectDuration);
+    $('sum-finish-date').textContent = calendar.formatFinish(pageStart || 0, projectDuration);
   }
 
   // Reported as of a date, the headline duration is a forecast rather than a

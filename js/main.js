@@ -790,7 +790,7 @@ function clearBaseline() {
  * came from levelling rather than from someone typing them.
  */
 function applyLevelling(mode) {
-  const { metrics, nodes, graph, projectDuration: before } = schedule();
+  const { metrics, nodes, graph, projectDuration: before, pageStart = 0 } = schedule();
   if (graph.cycleIds.length) {
     toast('Resolve the circular dependency first', 'error');
     return;
@@ -806,14 +806,17 @@ function applyLevelling(mode) {
   }
 
   // Only the tasks the resource pushed get a constraint. Their successors move
-  // because the logic says they must, which is already written down.
+  // because the logic says they must, which is already written down. On a
+  // sub-path the metrics are in project time, so subtract the page's start to
+  // write the constraint in the page's own frame — where the engine reads it.
   constrained.forEach(id => {
     const found = findNode(id);
-    if (found) found.node.startNoEarlierThan = +(metrics[id].ES + delays.get(id)).toFixed(4);
+    if (found) found.node.startNoEarlierThan = +(metrics[id].ES - pageStart + delays.get(id)).toFixed(4);
   });
 
   const moved = `${delays.size} task${delays.size === 1 ? '' : 's'}`;
-  const slip = +(projectDuration - before).toFixed(4);
+  // levelResources returns an absolute end; the original end is pageStart + span.
+  const slip = +(projectDuration - (pageStart + before)).toFixed(4);
   onChange(unresolved.length
     ? `Levelled ${moved}; ${unresolved.join(', ')} could not be separated within their float`
     : `Levelled ${moved}${slip > 0 ? `, finishing ${slip}d later` : ''}`);

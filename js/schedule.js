@@ -60,13 +60,26 @@ export function schedule() {
   const progressRollup = dataDate != null
     ? createProgressRollup(state.diagrams, mode)
     : null;
+
+  // A sub-path is a breakdown of a Main task; its work begins where that task
+  // does, not at the project origin. `pageStart` is that Main task's earliest
+  // start, so the page's schedule reads in project time. The reporting date is
+  // framed into the page before scheduling — a data date before the page starts
+  // means the page has not begun, so progress does not drive it yet.
+  const pageStart = pageStartOffset(state);
+  const localDataDate = dataDate == null ? null : dataDate - pageStart;
   const result = computeCPM(nodes, {
-    mode, rollup, graph, deadline, dataDate, progressRollup
+    mode, rollup, graph, deadline, dataDate: localDataDate, progressRollup
   });
+  shiftSchedule(result.metrics, pageStart);
   const calendar = createCalendar(state.calendar);
 
   cached = {
     ...result,
+    // The absolute reporting date, for positioning and date display; the framed
+    // one above only steered the page's own scheduling.
+    dataDate,
+    pageStart,
     nodes,
     graph,
     rollup,
@@ -79,6 +92,27 @@ export function schedule() {
     drift: baselineDrift(result, state.baseline)
   };
   return cached;
+}
+
+/**
+ * Where the active page sits in project time. Zero for Main; for a sub-path,
+ * the earliest start of the Main task that links it — so a branch of a task
+ * that begins on day 12 is dated from day 12, not from the project origin.
+ */
+function pageStartOffset(state) {
+  if (state.activeView === 'main') return 0;
+  const parent = nodesOf(state.diagrams.main).find(n => n.linkedSubPage === state.activeView);
+  if (!parent) return 0;
+  const es = mainSchedule().metrics[parent.id]?.ES;
+  return Number.isFinite(es) ? es : 0;
+}
+
+/** Shift a schedule's placements into project time, leaving spans and slack alone. */
+function shiftSchedule(metrics, offset) {
+  if (!offset) return;
+  Object.values(metrics).forEach(m => {
+    m.ES += offset; m.EF += offset; m.LS += offset; m.LF += offset;
+  });
 }
 
 /**

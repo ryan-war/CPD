@@ -154,20 +154,38 @@ export function exportCSV() {
 
   const rows = [header];
 
+  // Main first, so a sub-path can be dated from the Main task that owns it —
+  // its schedule is offset to that task's start, exactly as on screen.
+  const mainNodes = nodesOf(state.diagrams.main);
+  const mainMetrics = computeCPM(mainNodes, {
+    mode: state.estimationMode, rollup, deadline: state.deadline, dataDate: state.dataDate, progressRollup
+  }).metrics;
+  const pageStartFor = pid => {
+    if (pid === 'main') return 0;
+    const parent = mainNodes.find(n => n.linkedSubPage === pid);
+    const es = parent && mainMetrics[parent.id]?.ES;
+    return Number.isFinite(es) ? es : 0;
+  };
+
   (state.pageOrder || []).forEach(pageId => {
     const diagram = state.diagrams[pageId];
     if (!diagram) return;
     const nodes = nodesOf(diagram);
     if (!nodes.length) return;
+    const start = pageStartFor(pageId);
     const { metrics, criticalIds } = computeCPM(nodes, {
       mode: state.estimationMode,
       rollup,
       // Only Main answers to the project deadline, exactly as on screen.
       deadline: pageId === 'main' ? state.deadline : null,
-      // The data date applies everywhere, also exactly as on screen.
-      dataDate: state.dataDate,
+      // The data date applies everywhere; a sub-path frames it into its own
+      // window before scheduling, exactly as on screen.
+      dataDate: state.dataDate == null ? null : state.dataDate - start,
       progressRollup
     });
+    if (start) {
+      Object.values(metrics).forEach(m => { m.ES += start; m.EF += start; m.LS += start; m.LF += start; });
+    }
 
     (diagram.milestones || []).forEach(ms => {
       (ms.nodes || []).forEach(node => {
