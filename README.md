@@ -319,8 +319,7 @@ use in a spreadsheet.
                 { "id": "Z", "type": "FS", "lag": 0 }  // FS | SS | FF | SF
               ],
               "position": { "x": 0, "y": 20 },
-              "linkedSubPage": "sub_1",  // roll up this page's duration
-              "linkedMainNode": null     // sub-path tasks point back to Main
+              "linkedSubPage": "sub_1"   // roll up this page's duration
             }
           ]
         }
