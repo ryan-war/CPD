@@ -412,13 +412,20 @@ export function buildVisData() {
   const visNodes = [];
   sizeEstimates = new Map();
 
+  // Milestone title per task id, built once. Calling findNode() inside the loop
+  // rescans every milestone for each task, which is O(tasks²) on a wide diagram
+  // and runs on every canvas rebuild; a single pass up front is O(tasks).
+  const milestoneTitleById = new Map();
+  (diagram?.milestones || []).forEach(ms => {
+    (ms.nodes || []).forEach(n => milestoneTitleById.set(n.id, ms.title));
+  });
+
   nodes.forEach(node => {
     const metric = metrics[node.id];
     const label = boxes
       ? buildBoxLabel(node, metric, calendar)
       : buildNodeLabel(node, metric, state, calendar);
     const lineCount = label.split('\n').length;
-    const found = findNode(node.id);
     const criticality = getCriticality()?.get(node.id);
     const rollup = rollupForNode(node);
     sizeEstimates.set(node.id, estimateNodeSize(label, boxes));
@@ -445,7 +452,7 @@ export function buildVisData() {
           ? `Cost: ${state.currency || '$'}${Math.round(node.cost).toLocaleString()}` +
             (node.actualCost != null ? ` · actual ${state.currency || '$'}${Math.round(node.actualCost).toLocaleString()}` : '')
           : '',
-        `Milestone: ${found?.milestone.title || '—'}`,
+        `Milestone: ${milestoneTitleById.get(node.id) || '—'}`,
         `Duration used: ${fmt(metric.duration)}d`,
         node.mustFinishBy != null
           ? `Must finish by: ${calendar.enabled ? calendar.formatOffset(node.mustFinishBy) : `day ${fmt(node.mustFinishBy)}`}`
