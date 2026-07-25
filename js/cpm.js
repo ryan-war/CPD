@@ -484,12 +484,16 @@ export function computeCPM(nodes, options = {}) {
   const metrics = {};
 
   nodes.forEach(n => {
+    // One resolve per task: durationOf can walk a sub-page roll-up, so calling
+    // it three times to seed duration/remaining/span was three times the work
+    // for one answer.
+    const duration = durationOf(n, options);
     metrics[n.id] = {
       ...n,
-      duration: durationOf(n, options),
+      duration,
       ES: 0, EF: 0, LS: 0, LF: 0, slack: 0, freeFloat: 0,
-      remaining: durationOf(n, options),
-      span: durationOf(n, options),
+      remaining: duration,
+      span: duration,
       successors: (graph.succs.get(n.id) || []).map(s => s.id)
     };
   });

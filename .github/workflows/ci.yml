@@ -1,0 +1,56 @@
+name: CI
+
+# Runs the engine test suite on every push and PR, and — only when master is
+# green — publishes the static site to GitHub Pages. The deploy job depends on
+# the test job, so a red build can no longer reach the live site.
+#
+# NOTE: this requires the repository's Pages source to be set to "GitHub Actions"
+# (Settings → Pages → Build and deployment → Source). While it is still set to
+# "Deploy from a branch", this deploy job is inert and the branch deploy keeps
+# running unguarded.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Least privilege by default; the deploy job widens its own permissions.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # No dependencies to install — the suite runs on Node's built-in test
+      # runner, which auto-discovers test/*.test.js.
+      - run: node --test
+
+  deploy:
+    name: Deploy to Pages
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v4
