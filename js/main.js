@@ -30,7 +30,7 @@ import {
   renderRAID, setRaidFilter, setRaidShowClosed
 } from './panel.js';
 import {
-  openWorkspace, closeWorkspace, toggleWorkspace, setWorkspaceTool, isWorkspaceOpen
+  closeWorkspace, toggleWorkspaceOverlay, setWorkspaceTool, isWorkspaceOpen
 } from './workspace.js';
 import {
   initTable, renderTable, handleTableClick, handleTableChange
@@ -54,10 +54,9 @@ import {
 } from './scenario-ui.js';
 import { saveJSON, exportPNG, exportSVG, exportCSV, bindFileInput } from './io.js';
 import { buildShareLink, decodeProject, sharedPayloadInUrl, MAX_LINK_LENGTH } from './share.js';
-import { initSplitter, initCompactToolbar } from './layout-ui.js';
+import { initSplitter, initCompactToolbar, wireActionMenu, closeAllMenus } from './layout-ui.js';
 import { scheduleSave, saveNow, readSaved, clearSaved, describeAge } from './storage.js';
 
-let toolbarMenu = null;
 let autosaveReady = false;
 
 // ─── Render ────────────────────────────────────────────────
@@ -839,15 +838,9 @@ function wireToolbar() {
   $('btn-fit').addEventListener('click', () => fitView(300));
   $('btn-undo').addEventListener('click', doUndo);
   $('btn-redo').addEventListener('click', doRedo);
-  // Each analysis tool opens the roomy workspace overlay at its tab.
-  $('btn-gantt').addEventListener('click', () => toggleWorkspace('gantt'));
-  $('btn-table').addEventListener('click', () => toggleWorkspace('table'));
-  $('btn-resources').addEventListener('click', () => toggleWorkspace('resources'));
-  $('btn-quality').addEventListener('click', () => toggleWorkspace('quality'));
-  $('btn-evm').addEventListener('click', () => toggleWorkspace('evm'));
+  // One button for the analysis views; the overlay's own tabs pick between them.
+  $('btn-analyze').addEventListener('click', toggleWorkspaceOverlay);
   $('rag-badge').addEventListener('click', cycleProjectRag);
-  $('btn-cc').addEventListener('click', () => toggleWorkspace('cc'));
-  $('btn-raid').addEventListener('click', () => toggleWorkspace('raid'));
   $('workspace-close').addEventListener('click', closeWorkspace);
   document.querySelector('.workspace-tabs').addEventListener('click', event => {
     const tab = event.target.closest('[data-ws-tab]');
@@ -981,40 +974,11 @@ function wireToolbar() {
 }
 
 function wireDisplayMenu() {
-  const button = $('btn-display');
   const menu = $('display-menu');
+  // A menu of settings, not actions: ticking a box must not dismiss it, so the
+  // next box is one click away rather than two.
+  wireActionMenu($('btn-display'), menu, { closeOnChoice: false });
 
-  function position() {
-    const rect = button.getBoundingClientRect();
-    const width = menu.offsetWidth || 208;
-    const left = Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8);
-    menu.style.top = (rect.bottom + 6) + 'px';
-    menu.style.left = left + 'px';
-  }
-
-  function close() {
-    menu.classList.add('hidden');
-    button.setAttribute('aria-expanded', 'false');
-  }
-
-  button.addEventListener('click', event => {
-    event.stopPropagation();
-    if (menu.classList.contains('hidden')) {
-      menu.classList.remove('hidden');
-      position();
-      button.setAttribute('aria-expanded', 'true');
-    } else {
-      close();
-    }
-  });
-
-  document.addEventListener('click', event => {
-    if (!menu.contains(event.target) && !button.contains(event.target)) close();
-  });
-  window.addEventListener('resize', () => {
-    if (!menu.classList.contains('hidden')) position();
-  });
-  menu.addEventListener('click', event => event.stopPropagation());
   menu.addEventListener('change', event => {
     const ghost = event.target.closest('[data-ghosts]');
     if (ghost) {
@@ -1204,12 +1168,10 @@ function wireKeyboard() {
         closePagePicker();
         return;
       }
-      if (!$('display-menu').classList.contains('hidden')) {
-        $('display-menu').classList.add('hidden');
-        $('btn-display').setAttribute('aria-expanded', 'false');
+      if (document.querySelector('.popover:not(.hidden)')) {
+        closeAllMenus();
         return;
       }
-      if (toolbarMenu) toolbarMenu.closeMenu();
       if (isConnectMode()) {
         setConnectMode(false);
         return;
@@ -1487,6 +1449,8 @@ async function boot() {
 
   wireToolbar();
   wireDisplayMenu();
+  wireActionMenu($('btn-model'), $('model-menu'));
+  wireActionMenu($('btn-file'), $('file-menu'));
   wirePagePicker();
   wireModals();
   wirePanelDelegation();
@@ -1494,7 +1458,7 @@ async function boot() {
   wireProjectTitle();
   wireWindowResize();
   wireAutosaveFlush();
-  toolbarMenu = initCompactToolbar();
+  initCompactToolbar();
   initSplitter(() => redraw());
 
   initNetwork($('network-canvas'), {

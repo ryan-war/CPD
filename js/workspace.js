@@ -38,6 +38,7 @@ export function openWorkspace(tool) {
   if (tool && SETTERS[tool]) current = tool;
   open = true;
   $('workspace-overlay').classList.remove('hidden');
+  markToolbar();
   apply();
 }
 
@@ -45,13 +46,25 @@ export function closeWorkspace() {
   if (!open) return;
   open = false;
   $('workspace-overlay').classList.add('hidden');
+  markToolbar();
   TOOLS.forEach(t => SETTERS[t](false));
 }
 
-/** Toolbar buttons toggle: click the active tool's button to close it. */
-export function toggleWorkspace(tool) {
-  if (open && current === tool) closeWorkspace();
-  else openWorkspace(tool);
+/**
+ * The single Analyze button. There is one toolbar control for seven views
+ * because the overlay carries its own tab strip — a second copy of that picker
+ * on the header bought nothing and cost six buttons. Reopening lands on the tab
+ * you left, so returning to a view is one click.
+ */
+export function toggleWorkspaceOverlay() {
+  if (open) closeWorkspace();
+  else openWorkspace();
+}
+
+function markToolbar() {
+  const btn = $('btn-analyze');
+  btn.classList.toggle('tool-btn-active', open);
+  btn.setAttribute('aria-pressed', String(open));
 }
 
 export function setWorkspaceTool(tool) {

@@ -36,9 +36,6 @@ export function isGanttOpen() {
 export function setGanttOpen(open) {
   ganttOpen = open;
   $('gantt-panel').classList.toggle('open', open);
-  const btn = $('btn-gantt');
-  btn.classList.toggle('tool-btn-active', open);
-  btn.setAttribute('aria-pressed', String(open));
   if (open) renderGantt();
 }
 
@@ -49,9 +46,6 @@ export function isResourcesOpen() {
 export function setResourcesOpen(open) {
   resourcesOpen = open;
   $('resource-panel').classList.toggle('open', open);
-  const btn = $('btn-resources');
-  btn.classList.toggle('tool-btn-active', open);
-  btn.setAttribute('aria-pressed', String(open));
   if (open) renderResources();
 }
 
@@ -812,9 +806,6 @@ export function isQualityOpen() {
 export function setQualityOpen(open) {
   qualityOpen = open;
   $('quality-panel').classList.toggle('open', open);
-  const btn = $('btn-quality');
-  btn.classList.toggle('tool-btn-active', open);
-  btn.setAttribute('aria-pressed', String(open));
   if (open) renderQuality();
 }
 
@@ -891,9 +882,6 @@ export function isEvmOpen() {
 export function setEvmOpen(open) {
   evmOpen = open;
   $('evm-panel').classList.toggle('open', open);
-  const btn = $('btn-evm');
-  btn.classList.toggle('tool-btn-active', open);
-  btn.setAttribute('aria-pressed', String(open));
   if (open) renderEVM();
 }
 
@@ -1016,9 +1004,6 @@ export function isCCOpen() {
 export function setCCOpen(open) {
   ccOpen = open;
   $('cc-panel').classList.toggle('open', open);
-  const btn = $('btn-cc');
-  btn.classList.toggle('tool-btn-active', open);
-  btn.setAttribute('aria-pressed', String(open));
   if (open) renderCriticalChain();
 }
 
@@ -1139,9 +1124,6 @@ export function isRaidOpen() {
 export function setRaidOpen(open) {
   raidOpen = open;
   $('raid-panel').classList.toggle('open', open);
-  const btn = $('btn-raid');
-  btn.classList.toggle('tool-btn-active', open);
-  btn.setAttribute('aria-pressed', String(open));
   if (open) renderRAID();
 }
 

@@ -75,33 +75,97 @@ export function initSplitter(onResize) {
   apply(SPLIT_DEFAULT, false);
 }
 
+// ─── Toolbar popovers ──────────────────────────────────────
+//
+// Every toolbar menu — the overflow menu, Display, Model, File — is the same
+// mechanism: a button that shows a `.popover` under its right edge, which
+// closes on an outside click and follows the button on resize. This owns that
+// much and nothing else; what the menu *contains* stays with whoever wired it.
+
+/**
+ * @param {HTMLElement} button the toolbar button that opens the menu
+ * @param {HTMLElement} menu   the `.popover` it opens
+ * @param {{ closeOnChoice?: boolean }} [options] close once an item is picked —
+ *   right for menus of actions, wrong for menus of settings like Display.
+ * @returns {{ open: Function, close: Function, isOpen: Function }}
+ */
+export function wireActionMenu(button, menu, { closeOnChoice = true } = {}) {
+  function position() {
+    const rect = button.getBoundingClientRect();
+    const width = menu.offsetWidth || 208;
+    const left = Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8);
+    menu.style.top = (rect.bottom + 6) + 'px';
+    menu.style.left = left + 'px';
+  }
+
+  const isOpen = () => !menu.classList.contains('hidden');
+
+  function close() {
+    menu.classList.add('hidden');
+    button.setAttribute('aria-expanded', 'false');
+  }
+
+  function open() {
+    // One menu at a time. The button handler stops propagation so the
+    // outside-click close does not immediately undo the open — which also means
+    // opening File would otherwise leave Model hanging open beside it.
+    closeAllMenus();
+    menu.classList.remove('hidden');
+    // Placed only once visible: a hidden element measures zero wide.
+    position();
+    button.setAttribute('aria-expanded', 'true');
+  }
+
+  button.addEventListener('click', event => {
+    event.stopPropagation();
+    if (isOpen()) close(); else open();
+  });
+
+  // `label` as well as `button`: the Load JSON item is a label wrapping a
+  // hidden file input, not a button.
+  menu.addEventListener('click', event => {
+    if (closeOnChoice && event.target.closest('button, label')) close();
+    else event.stopPropagation();
+  });
+
+  document.addEventListener('click', event => {
+    if (!menu.contains(event.target) && !button.contains(event.target)) close();
+  });
+  window.addEventListener('resize', () => {
+    if (isOpen()) position();
+  });
+
+  return { open, close, isOpen };
+}
+
+/** Close whichever toolbar popover is showing. Used by the Escape handler. */
+export function closeAllMenus() {
+  document.querySelectorAll('.popover:not(.hidden)').forEach(menu => {
+    menu.classList.add('hidden');
+    const owner = menu.id && document.querySelector(`[aria-controls="${menu.id}"]`);
+    if (owner) owner.setAttribute('aria-expanded', 'false');
+  });
+}
+
 // ─── Compact toolbar ───────────────────────────────────────
 //
-// The header carries thirteen actions plus a search field. Below the
-// breakpoint they wrap into three rows and eat the canvas, so the secondary
-// ones move into an overflow menu and the primary ones stay on the bar.
+// Even grouped, the bar carries more than a narrow window holds. Below the
+// breakpoint the secondary controls move into an overflow menu and the primary
+// ones stay on the bar.
 
 export function initCompactToolbar() {
   const overflowBtn = $('btn-more');
-  const overflowMenu = $('more-menu');
   const overflowSlot = $('more-slot');
   const toolbar = $('toolbar-actions');
-  const secondary = Array.from(document.querySelectorAll('[data-secondary]'));
+  const menu = wireActionMenu(overflowBtn, $('more-menu'));
+  // Where each control was authored, so coming back from compact restores the
+  // bar rather than rebuilding it. Restoring "before the divider" instead would
+  // shunt every secondary control to the end of the bar — and since the widen
+  // path also runs once at boot, the order you wrote would never be the order
+  // anyone sees.
+  const secondary = Array.from(document.querySelectorAll('[data-secondary]'))
+    .map(el => ({ el, before: el.nextElementSibling }));
   let compact = null;
-
-  function position() {
-    const rect = overflowBtn.getBoundingClientRect();
-    const width = overflowMenu.offsetWidth || 220;
-    let left = rect.right - width;
-    left = Math.min(Math.max(8, left), window.innerWidth - width - 8);
-    overflowMenu.style.top = (rect.bottom + 6) + 'px';
-    overflowMenu.style.left = left + 'px';
-  }
-
-  function closeMenu() {
-    overflowMenu.classList.add('hidden');
-    overflowBtn.setAttribute('aria-expanded', 'false');
-  }
 
   function apply() {
     const next = window.innerWidth < COMPACT_BREAKPOINT;
@@ -109,39 +173,17 @@ export function initCompactToolbar() {
     compact = next;
     overflowBtn.classList.toggle('hidden', !compact);
     if (compact) {
-      secondary.forEach(el => overflowSlot.appendChild(el));
+      secondary.forEach(({ el }) => overflowSlot.appendChild(el));
     } else {
-      closeMenu();
-      secondary.forEach(el => toolbar.insertBefore(el, $('toolbar-divider')));
+      menu.close();
+      // Back to front: each control's recorded neighbour is in place by the
+      // time the one before it is inserted.
+      [...secondary].reverse().forEach(({ el, before }) => toolbar.insertBefore(el, before));
     }
     document.body.classList.toggle('compact-toolbar', compact);
   }
 
-  overflowBtn.addEventListener('click', event => {
-    event.stopPropagation();
-    const opening = overflowMenu.classList.contains('hidden');
-    if (opening) {
-      overflowMenu.classList.remove('hidden');
-      position();
-      overflowBtn.setAttribute('aria-expanded', 'true');
-    } else {
-      closeMenu();
-    }
-  });
-
-  overflowMenu.addEventListener('click', event => {
-    if (event.target.closest('button, label')) closeMenu();
-  });
-
-  document.addEventListener('click', event => {
-    if (!overflowMenu.contains(event.target) && !overflowBtn.contains(event.target)) closeMenu();
-  });
-
-  window.addEventListener('resize', () => {
-    apply();
-    if (!overflowMenu.classList.contains('hidden')) position();
-  });
+  window.addEventListener('resize', apply);
 
   apply();
-  return { closeMenu };
 }
