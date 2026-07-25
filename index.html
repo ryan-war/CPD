@@ -56,21 +56,6 @@
           <button type="button" id="btn-pert" data-secondary title="Toggle PERT estimation (O + 4M + P) / 6" aria-pressed="false" class="tool-btn">
             <i data-lucide="calculator" class="w-3.5 h-3.5" aria-hidden="true"></i> PERT
           </button>
-          <button type="button" id="btn-gantt" data-secondary title="Toggle mini-Gantt" aria-pressed="false" class="tool-btn">
-            <i data-lucide="bar-chart-3" class="w-3.5 h-3.5" aria-hidden="true"></i> Gantt
-          </button>
-          <button type="button" id="btn-resources" data-secondary title="Toggle resource load — who is doing what, and when they are double-booked" aria-pressed="false" class="tool-btn">
-            <i data-lucide="users" class="w-3.5 h-3.5" aria-hidden="true"></i> Resources
-          </button>
-          <button type="button" id="btn-quality" data-secondary title="Schedule health — whether the plan is sound, not just whether it computes" aria-pressed="false" class="tool-btn">
-            <i data-lucide="stethoscope" class="w-3.5 h-3.5" aria-hidden="true"></i> Health
-          </button>
-          <button type="button" id="btn-evm" data-secondary title="Cost &amp; earned value — whether the plan is on budget, not just on time" aria-pressed="false" class="tool-btn">
-            <i data-lucide="banknote" class="w-3.5 h-3.5" aria-hidden="true"></i> Cost
-          </button>
-          <button type="button" id="btn-cc" data-secondary title="Critical Chain — schedule buffers and how much of them the work has eaten" aria-pressed="false" class="tool-btn">
-            <i data-lucide="gauge" class="w-3.5 h-3.5" aria-hidden="true"></i> Chain
-          </button>
           <button type="button" id="btn-analyze" data-secondary title="Simulation, baseline, and what-if scenarios"
                   aria-haspopup="true" aria-expanded="false" aria-controls="analyze-menu" class="tool-btn">
             <i data-lucide="flask-conical" class="w-3.5 h-3.5" aria-hidden="true"></i> Analyze
@@ -208,6 +193,8 @@
         </div>
 
         <div id="tag-filter-bar" class="hidden" role="group" aria-label="Filter tasks by tag"></div>
+
+        <div id="analysis-tabs" class="analysis-tabs hidden shrink-0" role="tablist" aria-label="Analysis views"></div>
 
         <div id="gantt-panel" class="mb-4 shrink-0 card p-3">
           <div class="flex items-center justify-between mb-2">

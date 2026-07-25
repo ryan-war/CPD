@@ -17,44 +17,66 @@ import { getGhostNote, getActiveTags, clearActiveTags } from './network.js';
 import { tagsOf, tagCounts, matchesTags } from './tags.js';
 import { CRITICAL_COLOR, NEAR_CRITICAL_COLOR, LATE_COLOR, STATUS_COLORS, STATUS_LABELS, tagColor } from './config.js';
 
-let ganttOpen = false;
-let resourcesOpen = false;
-let qualityOpen = false;
-let evmOpen = false;
-let ccOpen = false;
+// One analysis view is open at a time, shown in the tabbed panel below the
+// diagram. Five independent cards stacked vertically buried the task list under
+// a column of charts and meant a lot of scrolling; a tab strip keeps one in
+// view and the rest one click away — and only the active one renders.
+let activeAnalysis = null; // 'gantt' | 'resources' | 'quality' | 'cc' | 'evm' | null
 let resourceCapacity = 1;
 let highlightedIds = new Set();
 
-export function isGanttOpen() {
-  return ganttOpen;
+const ANALYSES = [
+  { key: 'gantt', label: 'Gantt', icon: 'gantt-chart', panel: 'gantt-panel', render: renderGantt },
+  { key: 'resources', label: 'Resources', icon: 'users', panel: 'resource-panel', render: renderResources },
+  { key: 'quality', label: 'Health', icon: 'stethoscope', panel: 'quality-panel', render: renderQuality },
+  { key: 'cc', label: 'Chain', icon: 'gauge', panel: 'cc-panel', render: renderCriticalChain },
+  { key: 'evm', label: 'Cost', icon: 'banknote', panel: 'evm-panel', render: renderEVM }
+];
+
+export function getActiveAnalysis() {
+  return activeAnalysis;
 }
 
-export function setGanttOpen(open) {
-  ganttOpen = open;
-  $('gantt-panel').classList.toggle('open', open);
-  const btn = $('btn-gantt');
-  btn.classList.toggle('tool-btn-active', open);
-  btn.setAttribute('aria-pressed', String(open));
-  if (open) renderGantt();
+/** Select an analysis tab, or clicking the active one again closes the panel. */
+export function setAnalysis(key) {
+  activeAnalysis = activeAnalysis === key ? null : key;
+  ANALYSES.forEach(a => $(a.panel).classList.toggle('open', a.key === activeAnalysis));
+  renderAnalysisTabs();
+  renderActiveAnalysis();
 }
 
-export function isResourcesOpen() {
-  return resourcesOpen;
+/** Render only the open analysis — the whole point of the tab strip. */
+export function renderActiveAnalysis() {
+  const active = ANALYSES.find(a => a.key === activeAnalysis);
+  ANALYSES.forEach(a => $(a.panel).classList.toggle('open', a.key === activeAnalysis));
+  if (active) active.render();
 }
 
-export function setResourcesOpen(open) {
-  resourcesOpen = open;
-  $('resource-panel').classList.toggle('open', open);
-  const btn = $('btn-resources');
-  btn.classList.toggle('tool-btn-active', open);
-  btn.setAttribute('aria-pressed', String(open));
-  if (open) renderResources();
+/** The tab strip itself: one tab per analysis, the open one marked. */
+export function renderAnalysisTabs() {
+  const strip = $('analysis-tabs');
+  if (!strip) return;
+  const { nodes } = schedule();
+  if (!nodes.length) {
+    strip.classList.add('hidden');
+    strip.innerHTML = '';
+    return;
+  }
+  strip.classList.remove('hidden');
+  strip.innerHTML = ANALYSES.map(a => {
+    const on = a.key === activeAnalysis;
+    return `<button type="button" role="tab" class="analysis-tab${on ? ' analysis-tab-on' : ''}"
+              data-analysis="${a.key}" aria-selected="${on}" title="${escapeHtml(a.label)}">
+              <i data-lucide="${a.icon}" class="w-3.5 h-3.5" aria-hidden="true"></i>${escapeHtml(a.label)}
+            </button>`;
+  }).join('');
+  refreshIcons(strip);
 }
 
 /** How many tasks one person is assumed able to hold at once. */
 export function setResourceCapacity(value) {
   resourceCapacity = Math.max(1, Math.min(20, Number(value) || 1));
-  if (resourcesOpen) renderResources();
+  if (activeAnalysis === 'resources') renderResources();
 }
 
 /** How many tasks one person is taken to carry at once. */
@@ -485,7 +507,7 @@ export function renderTagFilter() {
 export function renderGantt() {
   const panel = $('gantt-panel');
   const body = $('gantt-body');
-  if (!ganttOpen) {
+  if (activeAnalysis !== 'gantt') {
     panel.classList.remove('open');
     return;
   }
@@ -589,7 +611,7 @@ function renderGanttAxis(projectDuration, calendar) {
 export function renderResources() {
   const panel = $('resource-panel');
   const body = $('resource-body');
-  if (!resourcesOpen) {
+  if (activeAnalysis !== 'resources') {
     panel.classList.remove('open');
     return;
   }
@@ -717,19 +739,6 @@ function levellingSection(nodes, metrics, projectDuration, calendar, load) {
 
 // ─── Schedule health ───────────────────────────────────────
 
-export function isQualityOpen() {
-  return qualityOpen;
-}
-
-export function setQualityOpen(open) {
-  qualityOpen = open;
-  $('quality-panel').classList.toggle('open', open);
-  const btn = $('btn-quality');
-  btn.classList.toggle('tool-btn-active', open);
-  btn.setAttribute('aria-pressed', String(open));
-  if (open) renderQuality();
-}
-
 /**
  * What the schedule is doing wrong, as against what it is.
  *
@@ -739,7 +748,7 @@ export function setQualityOpen(open) {
 export function renderQuality() {
   const panel = $('quality-panel');
   const body = $('quality-body');
-  if (!qualityOpen) {
+  if (activeAnalysis !== 'quality') {
     panel.classList.remove('open');
     return;
   }
@@ -796,19 +805,6 @@ export function renderQuality() {
 
 // ─── Cost / earned value ───────────────────────────────────
 
-export function isEvmOpen() {
-  return evmOpen;
-}
-
-export function setEvmOpen(open) {
-  evmOpen = open;
-  $('evm-panel').classList.toggle('open', open);
-  const btn = $('btn-evm');
-  btn.classList.toggle('tool-btn-active', open);
-  btn.setAttribute('aria-pressed', String(open));
-  if (open) renderEVM();
-}
-
 /** A money figure with the project's symbol, or an em dash when there is none. */
 function money(value) {
   if (value == null || Number.isNaN(value)) return '—';
@@ -850,7 +846,7 @@ function moneyTile(label, value, help, { signed = false } = {}) {
 export function renderEVM() {
   const panel = $('evm-panel');
   const body = $('evm-body');
-  if (!evmOpen) {
+  if (activeAnalysis !== 'evm') {
     panel.classList.remove('open');
     return;
   }
@@ -921,19 +917,6 @@ export function renderEVM() {
 
 // ─── Critical Chain ────────────────────────────────────────
 
-export function isCCOpen() {
-  return ccOpen;
-}
-
-export function setCCOpen(open) {
-  ccOpen = open;
-  $('cc-panel').classList.toggle('open', open);
-  const btn = $('btn-cc');
-  btn.classList.toggle('tool-btn-active', open);
-  btn.setAttribute('aria-pressed', String(open));
-  if (open) renderCriticalChain();
-}
-
 /** A plain stat tile — label over value — reusing the EVM tile styling. */
 function ccTile(label, text, help, cls = '') {
   return `<div class="stat-tile ${cls}" title="${escapeHtml(help)}">
@@ -976,7 +959,7 @@ function feverChart(consumption) {
 export function renderCriticalChain() {
   const panel = $('cc-panel');
   const body = $('cc-body');
-  if (!ccOpen) {
+  if (activeAnalysis !== 'cc') {
     panel.classList.remove('open');
     return;
   }

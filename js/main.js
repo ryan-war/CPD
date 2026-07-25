@@ -24,12 +24,9 @@ import {
   toggleActiveTag, clearActiveTags, retainActiveTags
 } from './network.js';
 import {
-  renderBottomPanel, renderGantt, renderSummary, renderLegend, clearMonteCarloSummary,
-  isGanttOpen, setGanttOpen, highlightTasks,
-  renderResources, isResourcesOpen, setResourcesOpen, setResourceCapacity, getResourceCapacity,
-  renderQuality, isQualityOpen, setQualityOpen, renderTagFilter,
-  renderEVM, isEvmOpen, setEvmOpen,
-  renderCriticalChain, isCCOpen, setCCOpen
+  renderBottomPanel, renderSummary, renderLegend, clearMonteCarloSummary, highlightTasks,
+  renderTagFilter, setResourceCapacity, getResourceCapacity,
+  setAnalysis, renderAnalysisTabs, renderActiveAnalysis
 } from './panel.js';
 import { levelResources } from './resources.js';
 import {
@@ -78,11 +75,8 @@ function render({ fit = false } = {}) {
   updateTabUI();
   renderTagFilter();
   renderBottomPanel();
-  renderGantt();
-  renderResources();
-  renderQuality();
-  renderEVM();
-  renderCriticalChain();
+  renderAnalysisTabs();
+  renderActiveAnalysis();
   renderLegend();
   updateHistoryButtons();
   updateCanvasEmptyState();
@@ -775,11 +769,12 @@ function wireToolbar() {
   $('btn-fit').addEventListener('click', () => fitView(300));
   $('btn-undo').addEventListener('click', doUndo);
   $('btn-redo').addEventListener('click', doRedo);
-  $('btn-gantt').addEventListener('click', () => setGanttOpen(!isGanttOpen()));
-  $('btn-resources').addEventListener('click', () => setResourcesOpen(!isResourcesOpen()));
-  $('btn-quality').addEventListener('click', () => setQualityOpen(!isQualityOpen()));
-  $('btn-evm').addEventListener('click', () => setEvmOpen(!isEvmOpen()));
-  $('btn-cc').addEventListener('click', () => setCCOpen(!isCCOpen()));
+  // The analysis views live in one tabbed panel now; a tab opens its view and
+  // clicking the open one again closes the panel.
+  $('analysis-tabs').addEventListener('click', event => {
+    const tab = event.target.closest('[data-analysis]');
+    if (tab) setAnalysis(tab.dataset.analysis);
+  });
   // A list of ids you cannot act on is just a reproach; clicking a finding
   // selects the tasks it names so you can go and look at them.
   $('quality-body').addEventListener('click', event => {
@@ -874,7 +869,6 @@ function wireToolbar() {
   bindFileInput(() => {
     resetViewState();
     applyTheme();
-    setGanttOpen(isGanttOpen());
     // What is on screen is now the loaded file, not the restored session.
     $('restore-banner').classList.add('hidden');
     $('shared-banner').classList.add('hidden');
