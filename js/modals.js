@@ -22,29 +22,29 @@ export function initModals(callbacks) {
 
 // ─── Task ──────────────────────────────────────────────────
 
+// The sub-page → Main link is a single-purpose control now: it only appears on
+// the Main Diagram, where a task can point into a Sub-Path page. On a sub-path
+// the field is hidden — a page already knows its owning Main task (the one whose
+// linkedSubPage points at it), and the page-tab strip carries the chip back to
+// it, so a second hand-set back-pointer per task was redundant and drift-prone.
 function populateLinkedSelect(currentValue) {
+  const field = $('edit-linked-field');
   const select = $('edit-linked');
-  const label = $('edit-linked-label');
   const hint = $('edit-linked-hint');
 
-  if (getState().activeView === 'main') {
-    label.textContent = 'Linked Sub-Page';
-    hint.textContent = 'Jump from this Main task into a Sub-Path diagram.';
-    select.innerHTML = ['<option value="">None</option>'].concat(
-      subPageIds().map(id =>
-        `<option value="${escapeHtml(id)}"${id === currentValue ? ' selected' : ''}>${escapeHtml(pageTitle(id))}</option>`)
-    ).join('');
-  } else {
-    label.textContent = 'Linked Main Task';
-    const mainNodes = allNodes(getState().diagrams.main);
-    hint.textContent = mainNodes.length
-      ? 'Jump from this Sub-Path task back to a task on the Main Diagram.'
-      : 'No tasks on the Main Diagram yet. Add one there first.';
-    select.innerHTML = ['<option value="">None</option>'].concat(
-      mainNodes.map(n =>
-        `<option value="${escapeHtml(n.id)}"${n.id === currentValue ? ' selected' : ''}>${escapeHtml(n.id)} — ${escapeHtml(n.title)}</option>`)
-    ).join('');
+  if (getState().activeView !== 'main') {
+    field.classList.add('hidden');
+    select.innerHTML = '<option value="">None</option>';
+    return;
   }
+
+  field.classList.remove('hidden');
+  $('edit-linked-label').textContent = 'Linked Sub-Page';
+  hint.textContent = 'Jump from this Main task into a Sub-Path diagram.';
+  select.innerHTML = ['<option value="">None</option>'].concat(
+    subPageIds().map(id =>
+      `<option value="${escapeHtml(id)}"${id === currentValue ? ' selected' : ''}>${escapeHtml(pageTitle(id))}</option>`)
+  ).join('');
 }
 
 // ─── Deadline fields ───────────────────────────────────────
@@ -158,9 +158,7 @@ export function openNodeModal(nodeId) {
     hintText: 'Leave empty for none. Holds the task back for something the network does not model — a permit, a delivery. It can only delay a task, never pull one in, and the paths feeding it may show float or go negative as a result.'
   });
 
-  populateLinkedSelect(getState().activeView === 'main'
-    ? (node.linkedSubPage || '')
-    : (node.linkedMainNode || ''));
+  populateLinkedSelect(node.linkedSubPage || '');
   renderDependencyEditor(node);
 
   $('edit-milestone').innerHTML = currentDiagram().milestones.map(ms =>
@@ -259,14 +257,8 @@ export function saveNodeForm(event) {
   node.startNoEarlierThan = readDeadlineField($('edit-snet'));
   node.dependencies = dependencies.map(toDependency);
 
-  const linkValue = $('edit-linked').value || null;
-  if (state.activeView === 'main') {
-    node.linkedSubPage = linkValue;
-    node.linkedMainNode = null;
-  } else {
-    node.linkedMainNode = linkValue;
-    node.linkedSubPage = null;
-  }
+  // The linked field is Main-only now; a sub-path task carries no forward link.
+  node.linkedSubPage = state.activeView === 'main' ? ($('edit-linked').value || null) : null;
 
   if (newId !== oldId) {
     node.id = newId;
@@ -276,14 +268,6 @@ export function saveNodeForm(event) {
         return dep.id === oldId ? { ...dep, id: newId } : dep;
       });
     });
-    if (state.activeView === 'main') {
-      Object.keys(state.diagrams).forEach(viewId => {
-        if (viewId === 'main') return;
-        allNodes(state.diagrams[viewId]).forEach(n => {
-          if (n.linkedMainNode === oldId) n.linkedMainNode = newId;
-        });
-      });
-    }
   }
 
   const targetMsId = $('edit-milestone').value;

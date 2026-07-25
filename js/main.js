@@ -418,8 +418,7 @@ function newTask(id, x, y) {
     startNoEarlierThan: null,
     dependencies: [],
     position: { x, y },
-    linkedSubPage: null,
-    linkedMainNode: null
+    linkedSubPage: null
   };
 }
 
@@ -456,7 +455,6 @@ function addNodeToMilestone(msId) {
 }
 
 function deleteNodes(ids) {
-  const state = getState();
   const doomed = new Set(ids);
   const diagram = currentDiagram();
   diagram.milestones.forEach(ms => {
@@ -465,20 +463,11 @@ function deleteNodes(ids) {
       n.dependencies = dependenciesOf(n).filter(d => !doomed.has(d.id));
     });
   });
-  if (state.activeView === 'main') {
-    Object.keys(state.diagrams).forEach(viewId => {
-      if (viewId === 'main') return;
-      allNodes(state.diagrams[viewId]).forEach(n => {
-        if (doomed.has(n.linkedMainNode)) n.linkedMainNode = null;
-      });
-    });
-  }
   clearSelection();
   onChange(ids.length === 1 ? `Deleted task ${ids[0]}` : `Deleted ${ids.length} tasks`);
 }
 
 function deleteMilestone(msId) {
-  const state = getState();
   const diagram = currentDiagram();
   const ms = diagram.milestones.find(m => m.id === msId);
   if (!ms) return;
@@ -492,14 +481,6 @@ function deleteMilestone(msId) {
       n.dependencies = dependenciesOf(n).filter(d => !ids.has(d.id));
     });
   });
-  if (state.activeView === 'main') {
-    Object.keys(state.diagrams).forEach(viewId => {
-      if (viewId === 'main') return;
-      allNodes(state.diagrams[viewId]).forEach(n => {
-        if (ids.has(n.linkedMainNode)) n.linkedMainNode = null;
-      });
-    });
-  }
   clearSelection();
   onChange('Milestone deleted', { relayout: true });
 }
@@ -1010,10 +991,9 @@ function wirePanelDelegation() {
   container.addEventListener('click', event => {
     const button = event.target.closest('button');
     if (button) {
-      const { editNode, gotoPage, gotoMain, addToMs, editMs, delMs, moveMs, dir, tag } = button.dataset;
+      const { editNode, gotoPage, addToMs, editMs, delMs, moveMs, dir, tag } = button.dataset;
       if (editNode) openNodeModal(editNode);
       else if (gotoPage) switchView(gotoPage);
-      else if (gotoMain) followNodeLink({ linkedMainNode: gotoMain }, nav);
       else if (addToMs) addNodeToMilestone(addToMs);
       else if (editMs) openMilestoneModal(editMs);
       else if (delMs) deleteMilestone(delMs);

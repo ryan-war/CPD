@@ -53,8 +53,7 @@ export function createDefaultState() {
                 progress: 100, status: 'done',
                 dependencies: [],
                 position: { x: 0, y: 20 },
-                linkedSubPage: 'sub_1',
-                linkedMainNode: null
+                linkedSubPage: 'sub_1'
               }
             ]
           },
@@ -70,8 +69,7 @@ export function createDefaultState() {
                 progress: 60, status: 'in_progress',
                 dependencies: ['A'],
                 position: { x: 280, y: 20 },
-                linkedSubPage: null,
-                linkedMainNode: null
+                linkedSubPage: null
               }
             ]
           },
@@ -87,8 +85,7 @@ export function createDefaultState() {
                 progress: 20, status: 'in_progress',
                 dependencies: ['B'],
                 position: { x: 560, y: -55 },
-                linkedSubPage: null,
-                linkedMainNode: null
+                linkedSubPage: null
               },
               {
                 id: 'D',
@@ -98,8 +95,7 @@ export function createDefaultState() {
                 progress: 0, status: 'not_started',
                 dependencies: ['B'],
                 position: { x: 560, y: 95 },
-                linkedSubPage: null,
-                linkedMainNode: null
+                linkedSubPage: null
               }
             ]
           },
@@ -115,8 +111,7 @@ export function createDefaultState() {
                 progress: 0, status: 'not_started',
                 dependencies: ['C', 'D'],
                 position: { x: 840, y: 20 },
-                linkedSubPage: null,
-                linkedMainNode: null
+                linkedSubPage: null
               }
             ]
           }
@@ -243,7 +238,10 @@ export function normalizeState(data) {
         if (!n.position || typeof n.position !== 'object') n.position = { x: 0, y: 0 };
         n.position = { x: numberOr(n.position.x, 0), y: numberOr(n.position.y, 0) };
         if (n.linkedSubPage === undefined) n.linkedSubPage = null;
-        if (n.linkedMainNode === undefined) n.linkedMainNode = null;
+        // linkedMainNode was a hand-set back-pointer from a sub-path task to a
+        // Main task — redundant with the page-tab strip's own back chip, and
+        // drift-prone. It is gone; drop it so old files migrate cleanly.
+        delete n.linkedMainNode;
       });
     });
 
@@ -259,17 +257,10 @@ export function normalizeState(data) {
   if (!data.pageOrder.includes('main')) data.pageOrder.unshift('main');
   if (!data.activeView || !data.diagrams[data.activeView]) data.activeView = 'main';
 
-  // Clear links that no longer resolve.
+  // Clear forward links that no longer resolve.
   Object.keys(data.diagrams).forEach(pageId => {
     nodesOf(data.diagrams[pageId]).forEach(n => {
       if (n.linkedSubPage && !data.diagrams[n.linkedSubPage]) n.linkedSubPage = null;
-    });
-  });
-  const mainIds = new Set(nodesOf(data.diagrams.main).map(n => n.id));
-  Object.keys(data.diagrams).forEach(pageId => {
-    if (pageId === 'main') return;
-    nodesOf(data.diagrams[pageId]).forEach(n => {
-      if (n.linkedMainNode && !mainIds.has(n.linkedMainNode)) n.linkedMainNode = null;
     });
   });
 

@@ -652,9 +652,7 @@ body.compact-toolbar .tab-group { padding-left: 0.125rem; }
 }
 .link-badge:hover { background: color-mix(in srgb, var(--badge) 28%, transparent); }
 .link-badge-sub { --badge: #3b82f6; }
-.link-badge-main { --badge: #10b981; }
 :root[data-theme='light'] .link-badge-sub { --badge: #1d4ed8; }
-:root[data-theme='light'] .link-badge-main { --badge: #047857; }
 
 .progress-row {
   display: grid;

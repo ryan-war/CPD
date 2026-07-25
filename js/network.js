@@ -140,7 +140,7 @@ function filteredByTags(node) {
 function buildNodeLabel(node, metric, state, calendar) {
   const d = displayOpts();
   const lines = [];
-  const hasLink = d.link && (node.linkedSubPage || node.linkedMainNode);
+  const hasLink = d.link && node.linkedSubPage;
   const linkMark = hasLink ? ' 🔗' : '';
 
   if (d.id) lines.push(`${node.id}${linkMark}`);

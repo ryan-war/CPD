@@ -149,7 +149,7 @@ export function exportCSV() {
     'ES', 'EF', 'LS', 'LF', 'Total Float', 'Free Float', 'Critical', 'Late',
     'Start No Earlier Than', 'Must Finish By',
     ...(useDates ? ['Start Date', 'Finish Date'] : []),
-    'Predecessors', 'Linked Sub-Page', 'Linked Main Task'
+    'Predecessors', 'Linked Sub-Page'
   ];
 
   const rows = [header];
@@ -202,8 +202,7 @@ export function exportCSV() {
           dependenciesOf(node)
             .map(d => (d.type === 'FS' && !d.lag) ? d.id : `${d.id}(${d.type}${d.lag ? (d.lag > 0 ? '+' : '') + d.lag : ''})`)
             .join(' '),
-          node.linkedSubPage ? pageTitle(node.linkedSubPage) : '',
-          node.linkedMainNode || ''
+          node.linkedSubPage ? pageTitle(node.linkedSubPage) : ''
         ]);
       });
     });

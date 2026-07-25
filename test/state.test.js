@@ -86,16 +86,19 @@ test('links that no longer resolve are cleared', () => {
   assert.equal(nodesOfMain(state)[0].linkedSubPage, null);
 });
 
-test('a sub-page linkedMainNode pointing at nothing is cleared', () => {
+test('the retired linkedMainNode back-pointer is dropped on load', () => {
+  // linkedMainNode was a hand-set sub-path → Main back-pointer, removed in favour
+  // of the page-tab strip's automatic back chip. Old files carrying it migrate
+  // by having the field deleted, not merely nulled.
   const state = normalizeState({
     diagrams: {
       main: { milestones: [{ id: 'm1', nodes: [{ id: 'A', min: 1, max: 2, dependencies: [] }] }] },
-      sub_1: { milestones: [{ id: 'm2', nodes: [{ id: 'S', min: 1, max: 2, dependencies: [], linkedMainNode: 'GHOST' }] }] }
+      sub_1: { milestones: [{ id: 'm2', nodes: [{ id: 'S', min: 1, max: 2, dependencies: [], linkedMainNode: 'A' }] }] }
     },
     pageOrder: ['main', 'sub_1']
   });
   const s = state.diagrams.sub_1.milestones[0].nodes[0];
-  assert.equal(s.linkedMainNode, null);
+  assert.equal('linkedMainNode' in s, false, 'the field is gone, not just null');
 });
 
 test('the schema version is stamped and export provenance is stripped', () => {
