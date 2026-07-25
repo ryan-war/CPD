@@ -30,10 +30,6 @@ export function isWorkspaceOpen() {
   return open;
 }
 
-export function activeWorkspaceTool() {
-  return open ? current : null;
-}
-
 export function openWorkspace(tool) {
   if (tool && SETTERS[tool]) current = tool;
   open = true;

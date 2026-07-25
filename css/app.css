@@ -1720,9 +1720,12 @@ form textarea:focus { border-color: var(--accent); }
   html, body { height: auto; overflow: visible; background: #fff; }
   /* `.popover` rather than a list of menu ids, so a new menu is hidden from
      print the day it is added rather than the day someone notices. */
+  /* `#workspace-overlay` belongs here with the modals: Print lives in the File
+     menu, which opens fine while the analysis overlay is up, so printing from
+     there used to put the Gantt over the diagram you asked to print. */
   #toolbar-actions, #page-tabs, #btn-add-subpath, #splitter, #bottom-panel,
   #canvas-controls, #legend, #minimap, #connect-hint, #canvas-empty,
-  #toasts, .popover, .modal {
+  #toasts, .popover, .modal, #workspace-overlay {
     display: none !important;
   }
   #app, #work-area, #canvas-pane { height: auto !important; display: block !important; min-height: 0 !important; }

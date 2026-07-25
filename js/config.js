@@ -172,7 +172,12 @@ export const DEFAULT_DISPLAY = {
 export const HISTORY_MAX = 50;
 
 // Below this viewport width the secondary toolbar actions collapse into a menu.
-export const COMPACT_BREAKPOINT = 1100;
+// Set from what the bar measures, not by eye: the full row needs 1174px of
+// viewport, so at the old 1100 there was a 74px band where the toolbar had
+// already wrapped to two rows but the overflow menu had not yet engaged — the
+// worst of both. Collapsing at 1180 hands over the moment one row stops fitting,
+// and the compact bar needs only ~812px, so it stays on one row well below this.
+export const COMPACT_BREAKPOINT = 1180;
 
 export const SPLIT_MIN = 20;
 export const SPLIT_MAX = 80;
