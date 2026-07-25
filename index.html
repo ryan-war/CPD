@@ -20,7 +20,7 @@
     <!-- Top bar -->
     <header id="app-header">
       <div class="flex flex-wrap items-center gap-2 justify-between">
-        <div class="flex items-center gap-3 min-w-0 flex-1">
+        <div id="header-identity" class="flex items-center gap-3 min-w-0 flex-1">
           <div class="flex items-center gap-2 shrink-0">
             <i data-lucide="git-branch" class="w-5 h-5 text-critical" aria-hidden="true"></i>
             <h1 id="project-title" class="project-title" contenteditable="true" spellcheck="false"
@@ -56,60 +56,24 @@
           <button type="button" id="btn-pert" data-secondary title="Toggle PERT estimation (O + 4M + P) / 6" aria-pressed="false" class="tool-btn">
             <i data-lucide="calculator" class="w-3.5 h-3.5" aria-hidden="true"></i> PERT
           </button>
-          <button type="button" id="btn-gantt" data-secondary title="Mini-Gantt timeline" aria-pressed="false" class="tool-btn">
-            <i data-lucide="bar-chart-3" class="w-3.5 h-3.5" aria-hidden="true"></i> Gantt
+
+          <!-- One button for seven views: the overlay carries its own tab strip,
+               so a second copy of that picker up here bought nothing. -->
+          <button type="button" id="btn-analyze" title="Analysis views — Gantt, table, resources, cost, health, chain, RAID" aria-pressed="false" class="tool-btn">
+            <i data-lucide="line-chart" class="w-3.5 h-3.5" aria-hidden="true"></i> Analyze
           </button>
-          <button type="button" id="btn-table" data-secondary title="Task table — a sortable, filterable, editable grid of the page's tasks" aria-pressed="false" class="tool-btn">
-            <i data-lucide="table" class="w-3.5 h-3.5" aria-hidden="true"></i> Table
+          <!-- Not `data-secondary`: these two *are* the compact form. Folding a
+               menu into the overflow menu would only nest one popover in
+               another and save a single button. -->
+          <button type="button" id="btn-model" title="Model the plan — simulate, baseline, scenarios"
+                  aria-haspopup="true" aria-expanded="false" aria-controls="model-menu" class="tool-btn">
+            <i data-lucide="flask-conical" class="w-3.5 h-3.5" aria-hidden="true"></i> Model
+            <i data-lucide="chevron-down" class="w-3 h-3 text-faint menu-caret" aria-hidden="true"></i>
           </button>
-          <button type="button" id="btn-resources" data-secondary title="Toggle resource load — who is doing what, and when they are double-booked" aria-pressed="false" class="tool-btn">
-            <i data-lucide="users" class="w-3.5 h-3.5" aria-hidden="true"></i> Resources
-          </button>
-          <button type="button" id="btn-quality" data-secondary title="Schedule health — whether the plan is sound, not just whether it computes" aria-pressed="false" class="tool-btn">
-            <i data-lucide="stethoscope" class="w-3.5 h-3.5" aria-hidden="true"></i> Health
-          </button>
-          <button type="button" id="btn-evm" data-secondary title="Cost &amp; earned value — whether the plan is on budget, not just on time" aria-pressed="false" class="tool-btn">
-            <i data-lucide="banknote" class="w-3.5 h-3.5" aria-hidden="true"></i> Cost
-          </button>
-          <button type="button" id="btn-cc" data-secondary title="Critical Chain — schedule buffers and how much of them the work has eaten" aria-pressed="false" class="tool-btn">
-            <i data-lucide="gauge" class="w-3.5 h-3.5" aria-hidden="true"></i> Chain
-          </button>
-          <button type="button" id="btn-raid" data-secondary title="RAID log — Risks, Assumptions, Issues, Dependencies" aria-pressed="false" class="tool-btn">
-            <i data-lucide="clipboard-list" class="w-3.5 h-3.5" aria-hidden="true"></i> RAID
-          </button>
-          <button type="button" id="btn-monte" data-secondary title="Monte Carlo risk simulation" class="tool-btn">
-            <i data-lucide="dices" class="w-3.5 h-3.5" aria-hidden="true"></i> Simulate
-          </button>
-          <button type="button" id="btn-baseline" data-secondary title="Capture the current schedule as the baseline" class="tool-btn">
-            <i data-lucide="flag" class="w-3.5 h-3.5" aria-hidden="true"></i> Set Baseline
-          </button>
-          <button type="button" id="btn-scenarios" data-secondary title="What-if scenarios — save, compare, and switch between plans" class="tool-btn">
-            <i data-lucide="git-fork" class="w-3.5 h-3.5" aria-hidden="true"></i> Scenarios
-          </button>
-          <button type="button" id="btn-settings" data-secondary title="Project settings — calendar, risk threshold, task shape" class="tool-btn">
-            <i data-lucide="settings" class="w-3.5 h-3.5" aria-hidden="true"></i> Settings
-          </button>
-          <button type="button" id="btn-save" data-secondary title="Save project as JSON" class="tool-btn">
-            <i data-lucide="download" class="w-3.5 h-3.5" aria-hidden="true"></i> Save JSON
-          </button>
-          <button type="button" id="btn-share" data-secondary title="Copy a shareable link to this project (no server — the plan travels in the link)" class="tool-btn">
-            <i data-lucide="share-2" class="w-3.5 h-3.5" aria-hidden="true"></i> Share Link
-          </button>
-          <label data-secondary class="tool-btn cursor-pointer">
-            <i data-lucide="upload" class="w-3.5 h-3.5" aria-hidden="true"></i> Load JSON
-            <input id="file-input" type="file" accept=".json,application/json" class="sr-only" />
-          </label>
-          <button type="button" id="btn-export-png" data-secondary title="Export the whole diagram as PNG" class="tool-btn">
-            <i data-lucide="image" class="w-3.5 h-3.5" aria-hidden="true"></i> Export PNG
-          </button>
-          <button type="button" id="btn-export-svg" data-secondary title="Export the whole diagram as vector SVG" class="tool-btn">
-            <i data-lucide="pen-tool" class="w-3.5 h-3.5" aria-hidden="true"></i> Export SVG
-          </button>
-          <button type="button" id="btn-export-csv" data-secondary title="Export the schedule as CSV" class="tool-btn">
-            <i data-lucide="table" class="w-3.5 h-3.5" aria-hidden="true"></i> Export CSV
-          </button>
-          <button type="button" id="btn-print" data-secondary title="Print the diagram (or save as PDF from the print dialog)" class="tool-btn">
-            <i data-lucide="printer" class="w-3.5 h-3.5" aria-hidden="true"></i> Print
+          <button type="button" id="btn-file" title="Project file — save, load, share, export, settings"
+                  aria-haspopup="true" aria-expanded="false" aria-controls="file-menu" class="tool-btn">
+            <i data-lucide="folder" class="w-3.5 h-3.5" aria-hidden="true"></i> File
+            <i data-lucide="chevron-down" class="w-3 h-3 text-faint menu-caret" aria-hidden="true"></i>
           </button>
 
           <button type="button" id="btn-more" title="More tools" aria-label="More tools"
@@ -343,6 +307,53 @@
     <input id="page-picker-search" type="search" class="picker-search"
            placeholder="Filter by page, task, or title…" aria-label="Filter sub-paths" />
     <div id="page-picker-list" class="picker-list"></div>
+  </div>
+
+  <!-- Model the plan. These keep their own ids and handlers; the menu only
+       decides where they live. -->
+  <div id="model-menu" class="hidden popover w-56 menu-list" role="group" aria-label="Modelling tools">
+    <button type="button" id="btn-monte" title="Monte Carlo risk simulation" class="tool-btn">
+      <i data-lucide="dices" class="w-3.5 h-3.5" aria-hidden="true"></i> Simulate
+    </button>
+    <button type="button" id="btn-baseline" title="Capture the current schedule as the baseline" class="tool-btn">
+      <i data-lucide="flag" class="w-3.5 h-3.5" aria-hidden="true"></i> Set Baseline
+    </button>
+    <button type="button" id="btn-scenarios" title="What-if scenarios — save, compare, and switch between plans" class="tool-btn">
+      <i data-lucide="git-fork" class="w-3.5 h-3.5" aria-hidden="true"></i> Scenarios
+    </button>
+  </div>
+
+  <!-- The project file: what it is saved as, shared as, and exported to. -->
+  <div id="file-menu" class="hidden popover w-56 menu-list" role="group" aria-label="Project file actions">
+    <button type="button" id="btn-save" title="Save project as JSON" class="tool-btn">
+      <i data-lucide="download" class="w-3.5 h-3.5" aria-hidden="true"></i> Save JSON
+    </button>
+    <label class="tool-btn cursor-pointer">
+      <i data-lucide="upload" class="w-3.5 h-3.5" aria-hidden="true"></i> Load JSON
+      <input id="file-input" type="file" accept=".json,application/json" class="sr-only" />
+    </label>
+    <button type="button" id="btn-share" title="Copy a shareable link to this project (no server — the plan travels in the link)" class="tool-btn">
+      <i data-lucide="share-2" class="w-3.5 h-3.5" aria-hidden="true"></i> Share Link
+    </button>
+
+    <div class="popover-heading mt-1">Export</div>
+    <button type="button" id="btn-export-png" title="Export the whole diagram as PNG" class="tool-btn">
+      <i data-lucide="image" class="w-3.5 h-3.5" aria-hidden="true"></i> PNG image
+    </button>
+    <button type="button" id="btn-export-svg" title="Export the whole diagram as vector SVG" class="tool-btn">
+      <i data-lucide="pen-tool" class="w-3.5 h-3.5" aria-hidden="true"></i> SVG vector
+    </button>
+    <button type="button" id="btn-export-csv" title="Export the schedule as CSV" class="tool-btn">
+      <i data-lucide="table" class="w-3.5 h-3.5" aria-hidden="true"></i> CSV schedule
+    </button>
+    <button type="button" id="btn-print" title="Print the diagram (or save as PDF from the print dialog)" class="tool-btn">
+      <i data-lucide="printer" class="w-3.5 h-3.5" aria-hidden="true"></i> Print / PDF
+    </button>
+
+    <div class="popover-heading mt-1">Project</div>
+    <button type="button" id="btn-settings" title="Project settings — calendar, risk threshold, task shape" class="tool-btn">
+      <i data-lucide="settings" class="w-3.5 h-3.5" aria-hidden="true"></i> Settings
+    </button>
   </div>
 
   <!-- Display options -->

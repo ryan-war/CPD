@@ -212,6 +212,13 @@ body.compact-toolbar .tab-group { padding-left: 0.125rem; }
   gap: 0.125rem 1rem;
 }
 
+/* The project title and page strip need a floor. They are `min-w-0` so the tab
+   strip can shrink, but that let the whole group collapse to a sliver once the
+   toolbar became a single unbroken row and outbid it for the line. Below this
+   width the header wraps and the toolbar takes the row underneath — which is
+   what should happen, rather than squeezing the title to nothing. */
+#header-identity { min-width: 20rem; }
+
 .toolbar-divider {
   width: 1px;
   height: 1.25rem;
@@ -317,7 +324,16 @@ body.compact-toolbar .tab-group { padding-left: 0.125rem; }
 #btn-more:not(.hidden),
 #btn-delete-subpath:not(.hidden) { display: inline-flex; }
 
-#more-slot > * { width: 100%; justify-content: flex-start; }
+/* Inside a menu a control is a row, not a chip: full width, text left-aligned
+   so the labels form a column the eye can run down. */
+#more-slot > *,
+.menu-list > * { width: 100%; justify-content: flex-start; }
+
+.menu-list { display: flex; flex-direction: column; gap: 0.125rem; }
+/* Tightened against its label, so the caret reads as part of the button rather
+   than another icon. Class, not [data-lucide] — Lucide keeps classes when it
+   swaps the placeholder for an svg, but the data attribute is not guaranteed. */
+.menu-caret { margin-left: -0.125rem; }
 
 .search-input {
   width: 7rem;
@@ -1702,9 +1718,11 @@ form textarea:focus { border-color: var(--accent); }
  * toolbar. The canvas is fitted to view first by the Print button. */
 @media print {
   html, body { height: auto; overflow: visible; background: #fff; }
+  /* `.popover` rather than a list of menu ids, so a new menu is hidden from
+     print the day it is added rather than the day someone notices. */
   #toolbar-actions, #page-tabs, #btn-add-subpath, #splitter, #bottom-panel,
   #canvas-controls, #legend, #minimap, #connect-hint, #canvas-empty,
-  #toasts, #more-menu, #page-picker, #display-menu, .modal {
+  #toasts, .popover, .modal {
     display: none !important;
   }
   #app, #work-area, #canvas-pane { height: auto !important; display: block !important; min-height: 0 !important; }

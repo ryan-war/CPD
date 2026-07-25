@@ -186,6 +186,10 @@ files you keep yourself.
 - **Minimap and zoom controls**, a resizable diagram/panel split, a colour
   legend, multi-select with bulk status changes, and inline progress sliders.
 - **Undo / redo**, search, and full keyboard access to the canvas.
+- **A toolbar that fits on one row** — the seven analysis views sit behind a
+  single **Analyze** button, because the overlay they open already has its own
+  tab strip; modelling tools are under **Model**, and everything to do with the
+  project file — save, load, share, export, settings — is under **File**.
 
 ## Usage
 
@@ -206,12 +210,12 @@ Open the published page, or serve the directory locally (see below).
 | Follow a task's link | `Alt`-click (or `Cmd`-click) it |
 | Show sub-paths on Main | **Display**, then a **Sub-paths on Main** option |
 | Find a page among many | The **sub-paths** button in the page strip |
-| Assign an owner | **Assigned to** on the task, then **Resources** |
-| Resolve a double-booking | **Resources**, then **Apply** on a levelling option |
-| Check the plan is sound | **Health** |
-| Set a deadline | **Settings** for the project, or **Must finish by** on a task |
+| Assign an owner | **Assigned to** on the task, then **Analyze → Resources** |
+| Resolve a double-booking | **Analyze → Resources**, then **Apply** on a levelling option |
+| Check the plan is sound | **Analyze → Health** |
+| Set a deadline | **File → Settings** for the project, or **Must finish by** on a task |
 | Hold a task back | **Start no earlier than** on the task |
-| Report progress as of a date | **Reported as of** in **Settings** |
+| Report progress as of a date | **Reported as of** in **File → Settings** |
 
 ### Keyboard shortcuts
 
@@ -276,8 +280,8 @@ dependencies or links pointing at things that no longer exist are dropped. Files
 written before precedence types existed — where `dependencies` was a plain array
 of task IDs — are migrated automatically to finish-to-start with no lag.
 
-**Export CSV** writes every task on every page with its computed schedule, for
-use in a spreadsheet.
+**File → CSV schedule** writes every task on every page with its computed
+schedule, for use in a spreadsheet.
 
 ```jsonc
 {
@@ -396,7 +400,7 @@ js/simulate.worker.js    the simulation loop itself
 js/network.js            canvas rendering, interaction, minimap, image export
 js/panel.js              milestone cards, Gantt, summary, legend
 js/modals.js             dialogs
-js/layout-ui.js          split pane and compact toolbar
+js/layout-ui.js          split pane, toolbar menus, and compact toolbar
 js/links.js              cross-page task links
 js/io.js                 JSON, CSV, and PNG export/import
 js/dom.js                escaping, toasts, focus management

@@ -30,11 +30,6 @@ export function isTableOpen() {
 export function setTableOpen(open) {
   tableOpen = open;
   $('table-panel').classList.toggle('open', open);
-  const btn = $('btn-table');
-  if (btn) {
-    btn.classList.toggle('tool-btn-active', open);
-    btn.setAttribute('aria-pressed', String(open));
-  }
   if (open) renderTable();
 }
 
