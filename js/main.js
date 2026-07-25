@@ -933,6 +933,54 @@ function wireDisplayMenu() {
   });
 }
 
+/**
+ * A toolbar button that opens a popover of actions (Export, Analyze). The action
+ * buttons inside keep their own click handlers wired elsewhere; this only owns
+ * open/close, placement, and closing once an item is chosen.
+ */
+function wireActionMenu(buttonId, menuId) {
+  const button = $(buttonId);
+  const menu = $(menuId);
+  if (!button || !menu) return;
+
+  function position() {
+    const rect = button.getBoundingClientRect();
+    const width = menu.offsetWidth || 208;
+    const left = Math.min(Math.max(8, rect.right - width), window.innerWidth - width - 8);
+    menu.style.top = (rect.bottom + 6) + 'px';
+    menu.style.left = left + 'px';
+  }
+
+  function close() {
+    menu.classList.add('hidden');
+    button.setAttribute('aria-expanded', 'false');
+  }
+
+  button.addEventListener('click', event => {
+    event.stopPropagation();
+    if (menu.classList.contains('hidden')) {
+      menu.classList.remove('hidden');
+      position();
+      button.setAttribute('aria-expanded', 'true');
+    } else {
+      close();
+    }
+  });
+
+  // An action fires its own handler and then the menu gets out of the way.
+  menu.addEventListener('click', event => {
+    if (event.target.closest('button')) close();
+  });
+  document.addEventListener('click', event => {
+    if (!menu.contains(event.target) && !button.contains(event.target)) close();
+  });
+  window.addEventListener('resize', () => {
+    if (!menu.classList.contains('hidden')) position();
+  });
+
+  return { close };
+}
+
 function wireModals() {
   $('form-node').addEventListener('submit', saveNodeForm);
   $('modal-node-close').addEventListener('click', closeNodeModal);
@@ -1366,6 +1414,8 @@ async function boot() {
 
   wireToolbar();
   wireDisplayMenu();
+  wireActionMenu('btn-analyze', 'analyze-menu');
+  wireActionMenu('btn-export', 'export-menu');
   wirePagePicker();
   wireModals();
   wirePanelDelegation();

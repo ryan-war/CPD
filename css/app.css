@@ -317,7 +317,8 @@ body.compact-toolbar .tab-group { padding-left: 0.125rem; }
 #btn-more:not(.hidden),
 #btn-delete-subpath:not(.hidden) { display: inline-flex; }
 
-#more-slot > * { width: 100%; justify-content: flex-start; }
+#more-slot > *,
+.menu-item { width: 100%; justify-content: flex-start; }
 
 .search-input {
   width: 7rem;
@@ -1505,7 +1506,7 @@ form textarea:focus { border-color: var(--accent); }
   html, body { height: auto; overflow: visible; background: #fff; }
   #toolbar-actions, #page-tabs, #btn-add-subpath, #splitter, #bottom-panel,
   #canvas-controls, #legend, #minimap, #connect-hint, #canvas-empty,
-  #toasts, #more-menu, #page-picker, #display-menu, .modal {
+  #toasts, #more-menu, #page-picker, #display-menu, #analyze-menu, #export-menu, .modal {
     display: none !important;
   }
   #app, #work-area, #canvas-pane { height: auto !important; display: block !important; min-height: 0 !important; }

@@ -71,14 +71,10 @@
           <button type="button" id="btn-cc" data-secondary title="Critical Chain — schedule buffers and how much of them the work has eaten" aria-pressed="false" class="tool-btn">
             <i data-lucide="gauge" class="w-3.5 h-3.5" aria-hidden="true"></i> Chain
           </button>
-          <button type="button" id="btn-monte" data-secondary title="Monte Carlo risk simulation" class="tool-btn">
-            <i data-lucide="dices" class="w-3.5 h-3.5" aria-hidden="true"></i> Simulate
-          </button>
-          <button type="button" id="btn-baseline" data-secondary title="Capture the current schedule as the baseline" class="tool-btn">
-            <i data-lucide="flag" class="w-3.5 h-3.5" aria-hidden="true"></i> Set Baseline
-          </button>
-          <button type="button" id="btn-scenarios" data-secondary title="What-if scenarios — save, compare, and switch between plans" class="tool-btn">
-            <i data-lucide="git-fork" class="w-3.5 h-3.5" aria-hidden="true"></i> Scenarios
+          <button type="button" id="btn-analyze" data-secondary title="Simulation, baseline, and what-if scenarios"
+                  aria-haspopup="true" aria-expanded="false" aria-controls="analyze-menu" class="tool-btn">
+            <i data-lucide="flask-conical" class="w-3.5 h-3.5" aria-hidden="true"></i> Analyze
+            <i data-lucide="chevron-down" class="w-3 h-3 -ml-0.5 opacity-60" aria-hidden="true"></i>
           </button>
           <button type="button" id="btn-settings" data-secondary title="Project settings — calendar, risk threshold, task shape" class="tool-btn">
             <i data-lucide="settings" class="w-3.5 h-3.5" aria-hidden="true"></i> Settings
@@ -93,17 +89,10 @@
             <i data-lucide="upload" class="w-3.5 h-3.5" aria-hidden="true"></i> Load JSON
             <input id="file-input" type="file" accept=".json,application/json" class="sr-only" />
           </label>
-          <button type="button" id="btn-export-png" data-secondary title="Export the whole diagram as PNG" class="tool-btn">
-            <i data-lucide="image" class="w-3.5 h-3.5" aria-hidden="true"></i> Export PNG
-          </button>
-          <button type="button" id="btn-export-svg" data-secondary title="Export the whole diagram as vector SVG" class="tool-btn">
-            <i data-lucide="pen-tool" class="w-3.5 h-3.5" aria-hidden="true"></i> Export SVG
-          </button>
-          <button type="button" id="btn-export-csv" data-secondary title="Export the schedule as CSV" class="tool-btn">
-            <i data-lucide="table" class="w-3.5 h-3.5" aria-hidden="true"></i> Export CSV
-          </button>
-          <button type="button" id="btn-print" data-secondary title="Print the diagram (or save as PDF from the print dialog)" class="tool-btn">
-            <i data-lucide="printer" class="w-3.5 h-3.5" aria-hidden="true"></i> Print
+          <button type="button" id="btn-export" data-secondary title="Export as PNG, SVG, CSV, or print"
+                  aria-haspopup="true" aria-expanded="false" aria-controls="export-menu" class="tool-btn">
+            <i data-lucide="share" class="w-3.5 h-3.5" aria-hidden="true"></i> Export
+            <i data-lucide="chevron-down" class="w-3 h-3 -ml-0.5 opacity-60" aria-hidden="true"></i>
           </button>
 
           <button type="button" id="btn-more" title="More tools" aria-label="More tools"
@@ -312,6 +301,35 @@
     <label class="check-row"><input type="radio" name="ghosts" data-ghosts="selected" /> Under selected task</label>
     <label class="check-row"><input type="radio" name="ghosts" data-ghosts="all" /> Under every linked task</label>
     <p class="hint px-1">Draws a linked sub-path in place, hanging below the task that stands for it. Click one to open its page.</p>
+  </div>
+
+  <!-- Analyze menu -->
+  <div id="analyze-menu" class="hidden popover w-52 flex flex-col gap-1" role="menu" aria-label="Analysis tools">
+    <button type="button" id="btn-monte" role="menuitem" title="Monte Carlo risk simulation" class="tool-btn menu-item">
+      <i data-lucide="dices" class="w-3.5 h-3.5" aria-hidden="true"></i> Simulate
+    </button>
+    <button type="button" id="btn-baseline" role="menuitem" title="Capture the current schedule as the baseline" class="tool-btn menu-item">
+      <i data-lucide="flag" class="w-3.5 h-3.5" aria-hidden="true"></i> Set Baseline
+    </button>
+    <button type="button" id="btn-scenarios" role="menuitem" title="What-if scenarios — save, compare, and switch between plans" class="tool-btn menu-item">
+      <i data-lucide="git-fork" class="w-3.5 h-3.5" aria-hidden="true"></i> Scenarios
+    </button>
+  </div>
+
+  <!-- Export menu -->
+  <div id="export-menu" class="hidden popover w-52 flex flex-col gap-1" role="menu" aria-label="Export options">
+    <button type="button" id="btn-export-png" role="menuitem" title="Export the whole diagram as PNG" class="tool-btn menu-item">
+      <i data-lucide="image" class="w-3.5 h-3.5" aria-hidden="true"></i> Export PNG
+    </button>
+    <button type="button" id="btn-export-svg" role="menuitem" title="Export the whole diagram as vector SVG" class="tool-btn menu-item">
+      <i data-lucide="pen-tool" class="w-3.5 h-3.5" aria-hidden="true"></i> Export SVG
+    </button>
+    <button type="button" id="btn-export-csv" role="menuitem" title="Export the schedule as CSV" class="tool-btn menu-item">
+      <i data-lucide="table" class="w-3.5 h-3.5" aria-hidden="true"></i> Export CSV
+    </button>
+    <button type="button" id="btn-print" role="menuitem" title="Print the diagram (or save as PDF from the print dialog)" class="tool-btn menu-item">
+      <i data-lucide="printer" class="w-3.5 h-3.5" aria-hidden="true"></i> Print
+    </button>
   </div>
 
   <!-- Task -->
