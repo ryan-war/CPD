@@ -1,0 +1,20 @@
+{
+  "name": "cpd-critical-path-network",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Browser-based Critical Path Method planner with PERT, working-day calendars, a Gantt timeline, and Monte Carlo schedule risk analysis.",
+  "homepage": "https://ryan-war.github.io/CPD/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ryan-war/CPD.git"
+  },
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "start": "npx --yes serve ."
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
