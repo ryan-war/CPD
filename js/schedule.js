@@ -9,12 +9,14 @@ import {
   computeCPM, createRollup, createProgressRollup, compileGraph, nodesOf
 } from './cpm.js';
 import { createCalendar } from './calendar.js';
+import { resourceLoad } from './resources.js';
 import { getState, allNodes } from './state.js';
 
 let cached = null;
 let cachedMain = null;
 let cachedRollups = null;
 let cachedChain = null;
+let cachedLoad = null;
 let criticality = null;
 
 /** Drop the cached schedule. Call after any mutation. */
@@ -23,6 +25,23 @@ export function invalidateSchedule() {
   cachedMain = null;
   cachedRollups = null;
   cachedChain = null;
+  cachedLoad = null;
+}
+
+/**
+ * Resource load for the active schedule, computed once per render.
+ *
+ * The Resources panel, the Health panel, and the levelling section each need
+ * it, so the same over-allocation sweep ran up to three times per render off
+ * the same nodes and metrics. Memoised on the capacity it was asked for, and
+ * dropped with the rest of the cache on any mutation.
+ */
+export function resourceLoadFor(capacity) {
+  if (cachedLoad && cachedLoad.capacity === capacity) return cachedLoad.load;
+  const s = schedule();
+  const load = resourceLoad(s.nodes, s.metrics, { capacity });
+  cachedLoad = { capacity, load };
+  return load;
 }
 
 /**

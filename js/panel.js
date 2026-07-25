@@ -2,13 +2,13 @@
 
 import { $, escapeHtml, refreshIcons } from './dom.js';
 import {
-  schedule, fmt, fmtDelta, fmtPercent, getCriticality, rollupForNode, isProjectCritical
+  schedule, resourceLoadFor, fmt, fmtDelta, fmtPercent, getCriticality, rollupForNode, isProjectCritical
 } from './schedule.js';
 import { getState, currentDiagram } from './state.js';
 import { dependenciesOf } from './cpm.js';
 import { linkBadgeHtml } from './links.js';
 import { orderedNodes } from './layout.js';
-import { resourceLoad, levelResources, UNASSIGNED } from './resources.js';
+import { levelResources, UNASSIGNED } from './resources.js';
 import { assessSchedule } from './quality.js';
 import { projectEVM } from './evm.js';
 import { criticalChainReport } from './critical-chain.js';
@@ -601,7 +601,7 @@ export function renderResources() {
     return;
   }
 
-  const load = resourceLoad(nodes, metrics, { capacity: resourceCapacity });
+  const load = resourceLoadFor(resourceCapacity);
   const anyNamed = load.some(r => r.name !== UNASSIGNED);
   if (!anyNamed) {
     body.innerHTML = `
@@ -755,7 +755,7 @@ export function renderQuality() {
     return;
   }
 
-  const overAllocated = resourceLoad(nodes, metrics, { capacity: resourceCapacity })
+  const overAllocated = resourceLoadFor(resourceCapacity)
     .filter(p => p.name !== UNASSIGNED && p.overloadedDays > 0)
     .map(p => p.name);
 
