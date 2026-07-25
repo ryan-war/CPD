@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { normalizeState } from '../js/state.js';
+import { SCHEMA_VERSION } from '../js/config.js';
 
 // normalizeState is the repair gate every loaded, shared, or hand-edited project
 // passes through. These lock the repairs the README promises: id de-duplication,
@@ -105,7 +106,7 @@ test('the schema version is stamped and export provenance is stripped', () => {
     [{ id: 'A', min: 1, max: 2, dependencies: [] }],
     { schemaVersion: 1, appVersion: '0.0.1', exportedAt: '2020-01-01T00:00:00.000Z' }
   ));
-  assert.equal(state.schemaVersion, 3);
+  assert.equal(state.schemaVersion, SCHEMA_VERSION);
   assert.equal(state.appVersion, undefined);
   assert.equal(state.exportedAt, undefined);
 });
