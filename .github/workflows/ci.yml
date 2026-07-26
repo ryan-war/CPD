@@ -4,10 +4,10 @@ name: CI
 # green — publishes the static site to GitHub Pages. The deploy job depends on
 # the test job, so a red build can no longer reach the live site.
 #
-# NOTE: this requires the repository's Pages source to be set to "GitHub Actions"
-# (Settings → Pages → Build and deployment → Source). While it is still set to
-# "Deploy from a branch", this deploy job is inert and the branch deploy keeps
-# running unguarded.
+# This depends on the repository's Pages source being "GitHub Actions"
+# (Settings → Pages → Build and deployment → Source), which it now is. If it is
+# ever switched back to "Deploy from a branch", this deploy job goes inert and
+# the branch deploy takes over again — publishing whether or not tests passed.
 
 on:
   push:
