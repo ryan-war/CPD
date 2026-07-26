@@ -1,0 +1,19 @@
+version: 2
+
+# The app itself has no package dependencies — the three libraries it uses are
+# vendored under vendor/ and pinned by filename, deliberately, so the site works
+# offline and cannot change under us. Dependabot cannot see those; bumping them
+# stays a manual, deliberate act.
+#
+# What it can watch is the CI workflow, which is the one place this repository
+# pulls in third-party code that runs with write access to Pages. Left alone,
+# those action pins quietly rot.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
+    labels:
+      - dependencies
